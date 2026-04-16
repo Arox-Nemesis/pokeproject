@@ -4,7 +4,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app/src
 
 # Set work directory
 WORKDIR /app
@@ -15,15 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY pyproject.toml ./
-RUN pip install --upgrade pip && \
-    pip install .
-
-# Copy application code
+# Copy application code and configs first!
+COPY pyproject.toml README.md alembic.ini ./
 COPY src/ ./src/
 COPY alembic/ ./alembic/
-COPY alembic.ini ./
+
+# NOW install Python dependencies and the bot itself
+RUN pip install --upgrade pip && \
+    pip install .
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash telemon && \

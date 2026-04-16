@@ -347,14 +347,37 @@ async def cmd_inventory(message: Message, session: AsyncSession, user: User) -> 
             for item_id, item_name, qty in categories[cat_key]:
                 lines.append(f"  <code>{item_id}</code> {item_name} x{qty}")
 
-    lines.append("\n<i>Use /use [item_id] [pokemon#] to use an item.</i>")
+    lines.append("\n<i>Use /use [item_id] [pokemon#] [qty|max] to use an item.\nUse /sell [item_id] [qty|max] to sell items.</i>")
 
     await message.answer("\n".join(lines))
 
 
+def _parse_quantity(arg: str, inventory_qty: int) -> int | None:
+    """Parse a quantity argument: int, 'max', or 'all'.
+
+    Returns the resolved quantity (capped at *inventory_qty*),
+    or ``None`` if the string is not a valid quantity token.
+    """
+    if arg.lower() in ("max", "all"):
+        return inventory_qty
+    try:
+        val = int(arg)
+        if val < 1:
+            return None
+        return min(val, inventory_qty)
+    except ValueError:
+        return None
+
+
 @router.message(Command("use"))
 async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
-    """Handle /use command for using items by ID."""
+    """Handle /use command for using items by ID.
+
+    Syntax:
+        /use <item_id>                      — use 1 on selected Pokemon
+        /use <item_id> <pokemon#>           — use 1 on Pokemon #N
+        /use <item_id> <pokemon#> <qty|max> — use qty (or max possible)
+    """
     if not message.text:
         return
 
@@ -362,9 +385,12 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
     if len(args) < 2:
         await message.answer(
             "Please specify an item ID to use!\n"
-            "Usage: /use [item_id] [pokemon#]\n"
-            "Example: /use 201 1 (use Rare Candy on Pokemon #1)\n"
-            "Example: /use 29 (use Linking Cord on selected Pokemon)"
+            "Usage: /use [item_id] [pokemon#] [qty|max]\n\n"
+            "<b>Examples:</b>\n"
+            "/use 201 1 — use 1 Rare Candy on Pokemon #1\n"
+            "/use 201 1 20 — use 20 Rare Candies on Pokemon #1\n"
+            "/use 201 1 max — use as many as possible\n"
+            "/use 29 — use Linking Cord on selected Pokemon"
         )
         return
 
@@ -402,6 +428,18 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             "Use /inventory to see your items."
         )
         return
+
+    # Parse optional quantity (3rd arg after pokemon#)
+    use_qty = 1
+    if len(args) >= 4:
+        parsed = _parse_quantity(args[3], inventory_item.quantity)
+        if parsed is None:
+            await message.answer(
+                "Invalid quantity! Use a number or 'max'.\n"
+                "Example: /use 201 1 20  or  /use 201 1 max"
+            )
+            return
+        use_qty = parsed
 
     # Get item details
     item_result = await session.execute(
@@ -463,37 +501,55 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             )
         return
 
-    # ── Rare Candy ──
+    # ── Rare Candy (supports multi-use) ──
     if item_id == RARE_CANDY_ID:
         poke = await _resolve_use_target(session, user, pokemon_idx)
         if poke is None:
             await message.answer(
-                "Please specify which Pokemon to use the Rare Candy on!\n"
-                "Usage: /use 201 [pokemon#]\n"
-                "Example: /use 201 1"
+                "Please specify which Pokemon to use Rare Candy on!\n"
+                "Usage: /use 201 [pokemon#] [qty|max]\n\n"
+                "<b>Examples:</b>\n"
+                "/use 201 1 — use 1 on Pokemon #1\n"
+                "/use 201 1 20 — use 20 at once\n"
+                "/use 201 1 max — use as many as possible"
             )
             return
 
         if poke.level >= MAX_LEVEL:
-            await message.answer(f"{poke.display_name} is already at max level!")
+            await message.answer(f"{poke.display_name} is already at max level ({MAX_LEVEL})!")
             return
 
-        # Use the rare candy
-        poke.level += 1
-        poke.friendship = min(MAX_FRIENDSHIP, poke.friendship + 3)
-        inventory_item.quantity -= 1
+        # Calculate how many can actually be used
+        levels_available = MAX_LEVEL - poke.level  # room to grow
+        max_usable = min(inventory_item.quantity, levels_available)
+        amount = min(use_qty, max_usable)
+
+        if amount <= 0:
+            await message.answer(f"{poke.display_name} is already at max level ({MAX_LEVEL})!")
+            return
+
+        old_level = poke.level
+        poke.level += amount
+        poke.friendship = min(MAX_FRIENDSHIP, poke.friendship + 3 * amount)
+        inventory_item.quantity -= amount
         await session.commit()
 
-        await message.answer(
-            f"<b>Rare Candy Used!</b>\n\n"
-            f"{poke.display_name} grew to Lv.{poke.level}!\n\n"
-            f"<i>Rare Candies remaining: {inventory_item.quantity}</i>"
-        )
+        lines = [
+            f"<b>Rare Candy ×{amount} Used!</b>\n",
+            f"{poke.display_name} grew from Lv.{old_level} → Lv.{poke.level}!",
+        ]
+        if poke.level >= MAX_LEVEL:
+            lines.append(f"\n🎉 {poke.display_name} reached the max level!")
+        lines.append(f"\n<i>Rare Candies remaining: {inventory_item.quantity}</i>")
+
+        await message.answer("\n".join(lines))
 
         logger.info(
             "User used rare candy",
             user_id=user.telegram_id,
             pokemon=poke.species.name,
+            amount=amount,
+            old_level=old_level,
             new_level=poke.level,
         )
 
@@ -506,7 +562,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         evo_result = await check_evolution(session, poke, user.telegram_id)
         if evo_result.can_evolve and evo_result.trigger == "level":
             await message.answer(
-                f"{poke.display_name} is ready to evolve! Use /evolve to evolve it."
+                f"✨ {poke.display_name} is ready to evolve! Use /evolve to evolve it."
             )
         return
 
@@ -600,6 +656,110 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
     await message.answer(
         f"Cannot use {item.name} directly.\n"
         f"Check /help for how to use this item."
+    )
+
+
+@router.message(Command("sell"))
+async def cmd_sell(message: Message, session: AsyncSession, user: User) -> None:
+    """Handle /sell command — sell items from inventory.
+
+    Syntax:
+        /sell <item_id>           — sell 1
+        /sell <item_id> <qty>     — sell qty
+        /sell <item_id> max       — sell all
+    """
+    if not message.text:
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "Please specify an item ID to sell!\n"
+            "Usage: /sell [item_id] [qty|max]\n\n"
+            "<b>Examples:</b>\n"
+            "/sell 201 — sell 1 Rare Candy\n"
+            "/sell 201 10 — sell 10 Rare Candies\n"
+            "/sell 201 max — sell all Rare Candies\n\n"
+            "<i>Use /inventory to see your items.</i>"
+        )
+        return
+
+    # Parse item ID
+    try:
+        item_id = int(args[1])
+    except ValueError:
+        await message.answer(
+            "Invalid item ID! Use a number.\n"
+            "Use /inventory to see your items."
+        )
+        return
+
+    # Check inventory
+    inv_result = await session.execute(
+        select(InventoryItem)
+        .where(InventoryItem.user_id == user.telegram_id)
+        .where(InventoryItem.item_id == item_id)
+        .where(InventoryItem.quantity > 0)
+    )
+    inventory_item = inv_result.scalar_one_or_none()
+
+    if not inventory_item:
+        await message.answer(
+            f"You don't have item ID {item_id}!\n"
+            "Use /inventory to see your items."
+        )
+        return
+
+    # Get item details for sell price
+    item_result = await session.execute(
+        select(Item).where(Item.id == item_id)
+    )
+    item = item_result.scalar_one_or_none()
+
+    if not item:
+        await message.answer("Item not found!")
+        return
+
+    if item.sell_price <= 0:
+        await message.answer(f"{item.name} cannot be sold!")
+        return
+
+    # Parse quantity
+    sell_qty = 1
+    if len(args) >= 3:
+        parsed = _parse_quantity(args[2], inventory_item.quantity)
+        if parsed is None:
+            await message.answer(
+                "Invalid quantity! Use a number or 'max'.\n"
+                "Example: /sell 201 10  or  /sell 201 max"
+            )
+            return
+        sell_qty = parsed
+
+    sell_qty = min(sell_qty, inventory_item.quantity)
+    if sell_qty <= 0:
+        await message.answer("Nothing to sell!")
+        return
+
+    total_earnings = item.sell_price * sell_qty
+    inventory_item.quantity -= sell_qty
+    user.balance += total_earnings
+    await session.commit()
+
+    logger.info(
+        "User sold item",
+        user_id=user.telegram_id,
+        item_id=item_id,
+        item_name=item.name,
+        quantity=sell_qty,
+        earnings=total_earnings,
+    )
+
+    await message.answer(
+        f"<b>Sold {item.name} ×{sell_qty}!</b>\n\n"
+        f"Earned: {total_earnings:,} {CURRENCY_SHORT}\n"
+        f"New balance: {user.balance:,} {CURRENCY_SHORT}\n\n"
+        f"<i>{item.name} remaining: {inventory_item.quantity}</i>"
     )
 
 

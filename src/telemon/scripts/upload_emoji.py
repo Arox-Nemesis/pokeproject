@@ -77,15 +77,15 @@ def eta_str(start: float, done: int, total: int) -> str:
 
 
 def set_name_for_batch(batch_num: int) -> str:
-    return f"telemon_emoji_{batch_num}_by_{BOT_USERNAME}"
+    return f"telemon_emoji_v2_{batch_num}_by_{BOT_USERNAME}"
 
 
 def set_title_for_batch(batch_num: int, start: int, end: int) -> str:
-    return f"Telemon Emoji #{start:04d}-#{end:04d}"
+    return f"Telemon Emoji v2 #{start:04d}-#{end:04d}"
 
 
 async def download_sprite(http: aiohttp.ClientSession, dex: int) -> bytes | None:
-    """Download and resize a sprite to 100x100 PNG."""
+    """Download and resize a sprite to 100x100 PNG using sharp pixel-art scaling."""
     url = SPRITE_BASE.format(dex=dex)
     try:
         async with http.get(url) as resp:
@@ -96,9 +96,26 @@ async def download_sprite(http: aiohttp.ClientSession, dex: int) -> bytes | None
                 return None
 
         img = Image.open(io.BytesIO(raw)).convert("RGBA")
-        img = img.resize((SPRITE_SIZE, SPRITE_SIZE), Image.LANCZOS)
+        
+        # 1. Crop the empty transparent space to make the sprite as large as possible
+        bbox = img.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+            
+        # 2. Calculate new size to fit exactly into SPRITE_SIZE x SPRITE_SIZE (100x100)
+        ratio = min(SPRITE_SIZE / img.width, SPRITE_SIZE / img.height)
+        new_size = (int(img.width * ratio), int(img.height * ratio))
+        
+        # 3. Resize using NEAREST to maintain sharp, unblurred pixel edges
+        img = img.resize(new_size, Image.NEAREST)
+        
+        # 4. Paste it perfectly in the center of a SPRITE_SIZE x SPRITE_SIZE transparent canvas
+        final_img = Image.new("RGBA", (SPRITE_SIZE, SPRITE_SIZE), (0, 0, 0, 0))
+        offset = ((SPRITE_SIZE - new_size[0]) // 2, (SPRITE_SIZE - new_size[1]) // 2)
+        final_img.paste(img, offset)
+
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        final_img.save(buf, format="PNG")
         return buf.getvalue()
     except Exception as e:
         print(f"  [WARN] Failed to download sprite {poke_label(dex)}: {e}")

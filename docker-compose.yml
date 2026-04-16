@@ -37,17 +37,17 @@ services:
     restart: unless-stopped
 
   # Telemon Bot (for production)
-  # bot:
-  #   build: .
-  #   container_name: telemon_bot
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   env_file:
-  #     - .env
-  #   restart: unless-stopped
+  bot:
+    build: .
+    container_name: telemon_bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
 
 volumes:
   postgres_data:

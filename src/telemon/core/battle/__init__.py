@@ -6,6 +6,7 @@ from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.database.models.battle import Battle, BattleStatus
@@ -645,13 +646,13 @@ async def execute_move(
     new_defender_hp = max(0, defender_hp - result.damage)
     
     # Update battle state
+    state = dict(battle.battle_state)  # copy so SQLAlchemy sees a new object
     if is_p1:
-        battle.battle_state["p2_hp"] = new_defender_hp
+        state["p2_hp"] = new_defender_hp
     else:
-        battle.battle_state["p1_hp"] = new_defender_hp
-    
-    # Force update the battle state to ensure SQLAlchemy detects the change in JSONB
-    battle.battle_state = dict(battle.battle_state)
+        state["p1_hp"] = new_defender_hp
+    battle.battle_state = state
+    flag_modified(battle, "battle_state")
     
     # Add to battle log
     log_entry = {
