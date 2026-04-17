@@ -11,6 +11,7 @@ from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import CURRENCY_NAME, CURRENCY_SHORT
+from telemon.core.emoji import poke_emoji
 from telemon.core.evolution import check_evolution, evolve_pokemon
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.database.models.trade import Trade, TradeHistory, TradeStatus
@@ -81,7 +82,8 @@ async def format_trade_status(session: AsyncSession, trade: Trade) -> str:
         poke = result.scalar_one_or_none()
         if poke:
             shiny = " " if poke.is_shiny else ""
-            user1_pokemon.append(f"  {shiny}{poke.species.name} Lv.{poke.level}")
+            sprite = poke_emoji(poke.species.national_dex)
+            user1_pokemon.append(f"  {sprite}{shiny}{poke.species.name} Lv.{poke.level}")
 
     user2_pokemon = []
     for poke_id in trade.user2_pokemon_ids or []:
@@ -91,7 +93,8 @@ async def format_trade_status(session: AsyncSession, trade: Trade) -> str:
         poke = result.scalar_one_or_none()
         if poke:
             shiny = " " if poke.is_shiny else ""
-            user2_pokemon.append(f"  {shiny}{poke.species.name} Lv.{poke.level}")
+            sprite = poke_emoji(poke.species.national_dex)
+            user2_pokemon.append(f"  {sprite}{shiny}{poke.species.name} Lv.{poke.level}")
 
     # Build status message
     u1_confirm = "" if trade.user1_confirmed else ""
@@ -422,8 +425,9 @@ async def trade_add_pokemon(
     await session.commit()
 
     shiny = " " if poke.is_shiny else ""
+    sprite = poke_emoji(poke.species.national_dex)
     await message.answer(
-        f" Added {shiny}<b>{poke.species.name}</b> Lv.{poke.level} to trade!\n\n"
+        f" Added {sprite}{shiny}<b>{poke.species.name}</b> Lv.{poke.level} to trade!\n\n"
         + await format_trade_status(session, trade)
     )
 

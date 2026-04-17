@@ -8,6 +8,7 @@ from aiogram.types import Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from telemon.core.emoji import poke_emoji
 from telemon.database.models import Pokemon, User, WonderTrade
 from telemon.logging import get_logger
 
@@ -262,10 +263,13 @@ async def do_wonder_trade(
         shiny_sent = " ✨" if poke.is_shiny else ""
         shiny_recv = " ✨" if received.is_shiny else ""
 
+        sprite_sent = poke_emoji(poke.species.national_dex)
+        sprite_recv = poke_emoji(received.species.national_dex)
+
         await message.answer(
             f"<b>Wonder Trade Complete!</b>\n\n"
-            f"<b>Sent:</b> {poke.species.name}{shiny_sent} (Lv.{poke.level})\n"
-            f"<b>Received:</b> {received.species.name}{shiny_recv} (Lv.{received.level})\n"
+            f"<b>Sent:</b> {sprite_sent}{poke.species.name}{shiny_sent} (Lv.{poke.level})\n"
+            f"<b>Received:</b> {sprite_recv}{received.species.name}{shiny_recv} (Lv.{received.level})\n"
             f"IV: {received.iv_percentage:.1f}% | Nature: {received.nature.title()}\n\n"
             f"<i>The other trainer sent you their {received.species.name}!</i>"
             f"{wt_ach_text}"
@@ -320,9 +324,10 @@ async def _deposit_pokemon(
     await session.commit()
 
     shiny = " ✨" if poke.is_shiny else ""
+    sprite = poke_emoji(poke.species.national_dex)
     await message.answer(
         f"<b>Wonder Trade — Pokemon Deposited!</b>\n\n"
-        f"<b>{poke.species.name}</b>{shiny} (Lv.{poke.level}) is now in the pool.\n\n"
+        f"{sprite}<b>{poke.species.name}</b>{shiny} (Lv.{poke.level}) is now in the pool.\n\n"
         f"When another trainer deposits a Pokemon, you'll swap instantly!\n"
         f"<i>Check back with /wt status</i>"
     )

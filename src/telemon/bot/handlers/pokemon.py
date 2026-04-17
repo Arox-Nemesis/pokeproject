@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import CURRENCY_SHORT
 from telemon.core.constants import MAX_FRIENDSHIP
+from telemon.core.emoji import poke_emoji, type_emoji
 from telemon.core.evolution import check_evolution, evolve_pokemon, get_possible_evolutions
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.logging import get_logger
@@ -323,8 +324,9 @@ async def cmd_pokemon(message: Message, session: AsyncSession, user: User) -> No
         # Selected indicator
         selected = " ◀️" if str(poke.id) == user.selected_pokemon_id else ""
 
+        sprite = poke_emoji(poke.species.national_dex)
         lines.append(
-            f"{idx}. {shiny}{fav}<b>{name}</b> "
+            f"{idx}. {sprite}{shiny}{fav}<b>{name}</b> "
             f"Lv.{poke.level} | {iv_pct}% IV{selected}"
         )
 
@@ -367,9 +369,11 @@ async def cmd_info(message: Message, session: AsyncSession, user: User) -> None:
     shiny = " ✨ SHINY" if poke.is_shiny else ""
     fav = " ❤️" if poke.is_favorite else ""
 
-    type_text = poke.species.type1.capitalize()
+    t1 = poke.species.type1
+    type_text = f"{type_emoji(t1)} {t1.capitalize()}"
     if poke.species.type2:
-        type_text += f" / {poke.species.type2.capitalize()}"
+        t2 = poke.species.type2
+        type_text += f" / {type_emoji(t2)} {t2.capitalize()}"
 
     gender_text = ""
     if poke.gender == "male":
@@ -392,8 +396,9 @@ async def cmd_info(message: Message, session: AsyncSession, user: User) -> None:
 
     nickname_line = f'\nNickname: "{poke.nickname}"' if poke.nickname else ""
 
+    sprite = poke_emoji(poke.species.national_dex)
     info = f"""\
-<b>{poke.display_name}</b>{shiny}{fav}{gender_text}
+{sprite}<b>{poke.display_name}</b>{shiny}{fav}{gender_text}
 {poke.species.name} #{poke.species.national_dex} | Gen {poke.species.generation}{nickname_line}
 
 <b>Type:</b> {type_text}
@@ -454,8 +459,9 @@ async def cmd_select(message: Message, session: AsyncSession, user: User) -> Non
     await session.commit()
 
     shiny = " ✨" if poke.is_shiny else ""
+    sprite = poke_emoji(poke.species.national_dex)
     await message.answer(
-        f"Selected <b>{poke.display_name}</b>{shiny} (Lv.{poke.level}) as your active Pokemon!"
+        f"{sprite}Selected <b>{poke.display_name}</b>{shiny} (Lv.{poke.level}) as your active Pokemon!"
     )
 
 
@@ -762,8 +768,9 @@ async def callback_pokemon_page(
         iv_pct = poke.iv_percentage
         selected = " ◀️" if str(poke.id) == user.selected_pokemon_id else ""
 
+        sprite = poke_emoji(poke.species.national_dex)
         lines.append(
-            f"{idx}. {shiny}{fav}<b>{name}</b> "
+            f"{idx}. {sprite}{shiny}{fav}<b>{name}</b> "
             f"Lv.{poke.level} | {iv_pct}% IV{selected}"
         )
 
@@ -877,10 +884,11 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
             except Exception:
                 pass
 
+            evo_sprite = poke_emoji(poke.species.national_dex)
             await message.answer(
                 f"<b>Congratulations!</b>\n\n"
                 f"{message_text}\n\n"
-                f"Your Pokemon is now a <b>{poke.species.name}</b>!{quest_text}{ach_text}{team_lvl_text}"
+                f"{evo_sprite}Your Pokemon is now a <b>{poke.species.name}</b>!{quest_text}{ach_text}{team_lvl_text}"
             )
             
             logger.info(

@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.core.constants import MAX_GENERATION
+from telemon.core.emoji import poke_emoji, type_emoji
 from telemon.core.forms import get_mega_forms
 from telemon.database.models import PokedexEntry, Pokemon, PokemonSpecies, User
 from telemon.logging import get_logger
@@ -393,10 +394,12 @@ def format_dex_entry_line(entry: dict, show_details: bool = False) -> str:
     if entry["type2"]:
         types += f"/{entry['type2'].title()}"
 
+    sprite = poke_emoji(dex_num) if (caught or seen) else ""
+
     if show_details and caught:
-        return f"{status} #{dex_num:03d} <b>{name}</b> [{types}] (x{entry['times_caught']})"
+        return f"{status} #{dex_num:03d} {sprite}<b>{name}</b> [{types}] (x{entry['times_caught']})"
     elif caught or seen:
-        return f"{status} #{dex_num:03d} <b>{name}</b> [{types}]"
+        return f"{status} #{dex_num:03d} {sprite}<b>{name}</b> [{types}]"
     else:
         return f"{status} #{dex_num:03d} ???"
 
@@ -515,7 +518,8 @@ async def show_pokedex_overview(
     recent_lines = []
     for entry in recent_entries:
         shiny = "✨" if entry.caught_shiny else ""
-        recent_lines.append(f"  #{entry.species_id:03d} {entry.species.name}{shiny}")
+        sprite = poke_emoji(entry.species_id)
+        recent_lines.append(f"  {sprite}#{entry.species_id:03d} {entry.species.name}{shiny}")
 
     recent_text = "\n".join(recent_lines) if recent_lines else "  <i>None yet!</i>"
 
@@ -655,10 +659,11 @@ async def _build_evolution_chain_text(
             chain_names = []
             for sid in path:
                 name = id_to_name.get(sid, f"#{sid}")
+                sp = poke_emoji(sid)
                 if sid == species.national_dex:
-                    chain_names.append(f"<b>{name}</b>")
+                    chain_names.append(f"{sp}<b>{name}</b>")
                 else:
-                    chain_names.append(name)
+                    chain_names.append(f"{sp}{name}")
             chains.append(chain_names)
 
         if not chains:
@@ -789,9 +794,11 @@ async def _entry_page_overview(
 ) -> tuple[str, InlineKeyboardBuilder]:
     """Page 1: Overview — type, stats, evolution, your Pokemon."""
     # Types
-    types = species.type1.title()
+    t1 = species.type1
+    types = f"{type_emoji(t1)} {t1.title()}"
     if species.type2:
-        types += f" / {species.type2.title()}"
+        t2 = species.type2
+        types += f" / {type_emoji(t2)} {t2.title()}"
 
     # Rarity
     rarity = species.rarity.title() if species.rarity else "Common"
@@ -852,8 +859,9 @@ async def _entry_page_overview(
     else:
         owned_text = "  <i>None</i>"
 
+    sprite = poke_emoji(species.national_dex)
     text = (
-        f"📕 <b>Pokédex #{species.national_dex:03d} — {species.name}</b>\n"
+        f"📕 <b>Pokédex #{species.national_dex:03d} — {sprite}{species.name}</b>\n"
         f"Type: {types}  |  Gen {species.generation} ({gen_name})\n"
         f"Rarity: {rarity}\n\n"
         f"<b>Base Stats</b> (BST: {species.base_stat_total})\n{stats_line}\n\n"

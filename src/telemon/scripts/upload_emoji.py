@@ -84,17 +84,39 @@ def set_title_for_batch(batch_num: int, start: int, end: int) -> str:
     return f"Telemon Emoji v2 #{start:04d}-#{end:04d}"
 
 
-async def download_sprite(http: aiohttp.ClientSession, dex: int) -> bytes | None:
-    """Download and resize a sprite to 100x100 PNG using sharp pixel-art scaling."""
-    url = SPRITE_BASE.format(dex=dex)
-    try:
-        async with http.get(url) as resp:
-            if resp.status != 200:
-                return None
-            raw = await resp.read()
-            if len(raw) < 100:
-                return None
+LOCAL_SPRITE_DIR = DATA_DIR / "sprites" / "pokemon"
 
+
+async def download_sprite(http: aiohttp.ClientSession, dex: int) -> bytes | None:
+    """Download and resize a sprite to 100x100 PNG using sharp pixel-art scaling.
+
+    Checks local sprite directory first, falls back to PokeAPI remote download.
+    """
+    raw: bytes | None = None
+
+    # Try local sprite first
+    local_path = LOCAL_SPRITE_DIR / f"{dex}.png"
+    if local_path.exists():
+        try:
+            raw = local_path.read_bytes()
+        except Exception:
+            raw = None
+
+    # Fallback to remote download
+    if not raw or len(raw) < 100:
+        url = SPRITE_BASE.format(dex=dex)
+        try:
+            async with http.get(url) as resp:
+                if resp.status != 200:
+                    return None
+                raw = await resp.read()
+                if len(raw) < 100:
+                    return None
+        except Exception as e:
+            print(f"  [WARN] Failed to download sprite {poke_label(dex)}: {e}")
+            return None
+
+    try:
         img = Image.open(io.BytesIO(raw)).convert("RGBA")
         
         # 1. Crop the empty transparent space to make the sprite as large as possible
@@ -118,7 +140,7 @@ async def download_sprite(http: aiohttp.ClientSession, dex: int) -> bytes | None
         final_img.save(buf, format="PNG")
         return buf.getvalue()
     except Exception as e:
-        print(f"  [WARN] Failed to download sprite {poke_label(dex)}: {e}")
+        print(f"  [WARN] Failed to process sprite {poke_label(dex)}: {e}")
         return None
 
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import settings
+from telemon.core.emoji import poke_emoji, rarity_emoji
 from telemon.core.spawning import check_spawn_trigger, create_spawn, get_random_species
 from telemon.database.models import ActiveSpawn, Group, PokemonSpecies
 from telemon.logging import get_logger
@@ -75,13 +76,14 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
     from telemon.core.imaging import generate_spawn_image
 
     species = spawn.species
+    sprite = poke_emoji(species.national_dex)
 
     # Build spawn message
     shiny_text = " ✨ SHINY!" if spawn.is_shiny else ""
     rarity_text = get_rarity_text(species)
 
     caption = (
-        f"🔴 <b>A wild Pokémon has appeared!</b>{shiny_text}\n"
+        f"{sprite}🔴 <b>A wild Pokémon has appeared!</b>{shiny_text}\n"
         f"{rarity_text}\n\n"
         f"Type <code>/catch [name]</code> to catch it!\n"
         f"Use <code>/hint</code> if you need help.\n\n"
@@ -128,17 +130,7 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
 
 def get_rarity_text(species: PokemonSpecies) -> str:
     """Get rarity text based on Pokemon rarity."""
-    if species.is_mythical:
-        return "🌟 <b>MYTHICAL</b>"
-    if species.is_legendary:
-        return "⭐ <b>LEGENDARY</b>"
-    if species.catch_rate <= 3:
-        return "💎 <b>Ultra Rare</b>"
-    if species.catch_rate <= 45:
-        return "🔷 <b>Rare</b>"
-    if species.catch_rate <= 120:
-        return "🔹 Uncommon"
-    return ""
+    return rarity_emoji(species)
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))

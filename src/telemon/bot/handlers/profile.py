@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import settings, CURRENCY_NAME, CURRENCY_SHORT
 from telemon.core.constants import MAX_FRIENDSHIP, MAX_LEVEL, MAX_GIFT_AMOUNT
+from telemon.core.emoji import poke_emoji
 from telemon.database.models import PokedexEntry, Pokemon, User
 from telemon.logging import get_logger
 
@@ -51,7 +52,8 @@ async def cmd_profile(message: Message, session: AsyncSession, user: User) -> No
         sel_poke = sel_result.scalar_one_or_none()
         if sel_poke:
             shiny_mark = " ✨" if sel_poke.is_shiny else ""
-            selected_text = f"{sel_poke.display_name}{shiny_mark} Lv.{sel_poke.level} | Friendship: {sel_poke.friendship}/{MAX_FRIENDSHIP}"
+            sprite = poke_emoji(sel_poke.species.national_dex)
+            selected_text = f"{sprite}{sel_poke.display_name}{shiny_mark} Lv.{sel_poke.level} | Friendship: {sel_poke.friendship}/{MAX_FRIENDSHIP}"
 
     profile_text = (
         f"<b>Trainer Profile</b>\n\n"

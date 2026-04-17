@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import CURRENCY_NAME, CURRENCY_SHORT
 from telemon.core.constants import NATURES, MAX_IV, MAX_IV_TOTAL, MAX_LEVEL, MAX_FRIENDSHIP, CATCH_LEVEL_MIN, CATCH_LEVEL_MAX, determine_gender, iv_percentage, random_nature
+from telemon.core.emoji import poke_emoji
 from telemon.database.models import ActiveSpawn, Group, Pokemon, PokedexEntry, User
 from telemon.logging import get_logger
 
@@ -384,9 +385,10 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     else:
         iv_rating = "Poor"
 
+    sprite = poke_emoji(spawn.species.national_dex)
     msg_lines = [
         f"<b>Congratulations {user.display_name}!</b>\n",
-        f"You caught a{shiny_text} <b>{spawn.species.name}</b>!\n",
+        f"{sprite}You caught a{shiny_text} <b>{spawn.species.name}</b>!\n",
         f"Level: {new_pokemon.level}",
         f"IVs: {iv_percent}% ({iv_rating})",
         f"Nature: {nature.capitalize()}",
