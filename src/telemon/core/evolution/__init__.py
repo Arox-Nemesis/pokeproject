@@ -23,7 +23,7 @@ def _load_evolution_data() -> dict[str, Any]:
     if _EVOLUTION_DATA:
         return _EVOLUTION_DATA
 
-    data_path = Path(__file__).parent.parent.parent.parent / "data" / "evolutions.json"
+    data_path = Path(__file__).parent.parent.parent.parent.parent / "data" / "evolutions.json"
     if data_path.exists():
         with open(data_path) as f:
             _EVOLUTION_DATA = json.load(f)

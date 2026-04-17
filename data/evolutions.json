@@ -128,6 +128,12 @@
   "10": {
     "chain": [
       {
+        "species_id": 172,
+        "evolves_to": 25,
+        "trigger": "friendship",
+        "min_friendship": 220
+      },
+      {
         "species_id": 25,
         "evolves_to": 26,
         "trigger": "item",
@@ -180,6 +186,12 @@
   "14": {
     "chain": [
       {
+        "species_id": 173,
+        "evolves_to": 35,
+        "trigger": "friendship",
+        "min_friendship": 220
+      },
+      {
         "species_id": 35,
         "evolves_to": 36,
         "trigger": "item",
@@ -199,6 +211,12 @@
   },
   "16": {
     "chain": [
+      {
+        "species_id": 174,
+        "evolves_to": 39,
+        "trigger": "friendship",
+        "min_friendship": 220
+      },
       {
         "species_id": 39,
         "evolves_to": 40,
@@ -4227,6 +4245,26 @@
         "evolves_to": 1013,
         "trigger": "level",
         "min_level": 1
+      }
+    ]
+  },
+  "540": {
+    "chain": [
+      {
+        "species_id": 239,
+        "evolves_to": 125,
+        "trigger": "level",
+        "min_level": 30
+      }
+    ]
+  },
+  "541": {
+    "chain": [
+      {
+        "species_id": 439,
+        "evolves_to": 122,
+        "trigger": "level",
+        "min_level": 18
       }
     ]
   }

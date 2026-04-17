@@ -1,6 +1,7 @@
 """Pokedex-related handlers for tracking Pokemon collection progress."""
 
 import math
+import re
 from datetime import datetime
 
 from aiogram import F, Router
@@ -11,11 +12,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.core.constants import MAX_GENERATION
+from telemon.core.forms import get_mega_forms
 from telemon.database.models import PokedexEntry, Pokemon, PokemonSpecies, User
 from telemon.logging import get_logger
 
 router = Router(name="pokedex")
 logger = get_logger(__name__)
+
+# Known form prefixes to strip when searching
+FORM_PREFIXES = ("mega", "alolan", "galarian", "hisuian", "paldean", "galar", "alola", "hisui", "paldea")
 
 # Constants
 ENTRIES_PER_PAGE = 10
@@ -256,10 +261,40 @@ async def get_pokedex_entries(
     return page_entries, total_count
 
 
+def resolve_form_query(query: str) -> tuple[str, str | None]:
+    """Detect and strip form prefixes from a query.
+
+    Returns (base_name, form_type) where form_type is e.g. 'mega',
+    'alolan', etc., or None if no prefix was found.
+    """
+    q = query.strip().lower()
+    for prefix in FORM_PREFIXES:
+        if q.startswith(prefix + " "):
+            base = q[len(prefix):].strip()
+            # Normalise prefix to canonical form
+            canonical = prefix
+            if canonical in ("alola",):
+                canonical = "alolan"
+            elif canonical in ("galar",):
+                canonical = "galarian"
+            elif canonical in ("hisui",):
+                canonical = "hisuian"
+            elif canonical in ("paldea",):
+                canonical = "paldean"
+            return base, canonical
+    return query.strip(), None
+
+
 async def get_species_by_name_or_number(
     session: AsyncSession, query: str
 ) -> PokemonSpecies | None:
-    """Find a Pokemon species by name or dex number."""
+    """Find a Pokemon species by name or dex number.
+
+    Priority: exact match → starts-with → contains.
+    Uses the full multi-word query to avoid false matches.
+    """
+    query = query.strip()
+
     # Try as number first
     if query.isdigit():
         result = await session.execute(
@@ -268,7 +303,7 @@ async def get_species_by_name_or_number(
         )
         return result.scalar_one_or_none()
 
-    # Try as name
+    # 1. Exact match (case-insensitive)
     result = await session.execute(
         select(PokemonSpecies)
         .where(PokemonSpecies.name.ilike(query))
@@ -277,10 +312,22 @@ async def get_species_by_name_or_number(
     if species:
         return species
 
-    # Try partial match
+    # 2. Starts-with match
+    result = await session.execute(
+        select(PokemonSpecies)
+        .where(PokemonSpecies.name.ilike(f"{query}%"))
+        .order_by(PokemonSpecies.national_dex)
+        .limit(1)
+    )
+    species = result.scalar_one_or_none()
+    if species:
+        return species
+
+    # 3. Contains match (last resort)
     result = await session.execute(
         select(PokemonSpecies)
         .where(PokemonSpecies.name.ilike(f"%{query}%"))
+        .order_by(PokemonSpecies.national_dex)
         .limit(1)
     )
     return result.scalar_one_or_none()
@@ -365,13 +412,8 @@ def generate_progress_bar(percent: float, width: int = 10) -> str:
 async def cmd_pokedex(message: Message, session: AsyncSession, user: User) -> None:
     """Handle /pokedex command and subcommands."""
     text = message.text or ""
-    # Strip command prefix
-    if text.startswith("/pokedex"):
-        raw = text[len("/pokedex"):].strip()
-    elif text.startswith("/dex"):
-        raw = text[len("/dex"):].strip()
-    else:
-        raw = ""
+    # Strip command prefix and bot mention (e.g. /pokedex@TelemonXRobot)
+    raw = re.sub(r"^/(?:pokedex|dex)(?:@\S+)?", "", text, count=1).strip()
 
     args = parse_pokedex_args(raw)
     sub = args["subcommand"]
@@ -392,16 +434,21 @@ async def cmd_pokedex(message: Message, session: AsyncSession, user: User) -> No
     elif sub in ("seen",):
         await show_pokedex_list(message, session, user, filter_type="seen", page=args["page"], gen=gen)
     elif sub in ("search", "find"):
-        query = args["query"]
-        if query:
-            await pokedex_search(message, session, user, query)
+        # Rejoin subcommand + query for multi-word searches like "search Mega Charizard X"
+        full_query = args["query"]
+        if full_query:
+            await pokedex_search(message, session, user, full_query)
         else:
             await message.answer("Usage: /pokedex search [name or number]")
     elif sub == "help":
         await pokedex_help(message)
     else:
-        # Try to look up by name or number
-        await pokedex_search(message, session, user, sub)
+        # Rejoin subcommand + any extra query for multi-word names
+        # e.g. "/pokedex Mega Charizard X" → sub='mega', query='charizard x'
+        full_query = sub
+        if args["query"]:
+            full_query = f"{sub} {args['query']}"
+        await pokedex_search(message, session, user, full_query)
 
 
 async def show_pokedex_overview(
@@ -638,8 +685,13 @@ async def _build_evolution_chain_text(
 async def pokedex_search(
     message: Message, session: AsyncSession, user: User, query: str
 ) -> None:
-    """Search for and display a specific Pokemon entry."""
-    species = await get_species_by_name_or_number(session, query)
+    """Search for and display a specific Pokemon entry.
+
+    Handles form prefixes (Mega, Alolan, etc.) and shows a paginated
+    inline-button view: Overview → Details → Forms.
+    """
+    base_query, form_type = resolve_form_query(query)
+    species = await get_species_by_name_or_number(session, base_query)
 
     if not species:
         await message.answer(
@@ -648,51 +700,98 @@ async def pokedex_search(
         )
         return
 
-    # Get user's entry for this species
-    entry_result = await session.execute(
-        select(PokedexEntry)
-        .where(PokedexEntry.user_id == user.telegram_id)
-        .where(PokedexEntry.species_id == species.national_dex)
+    # If user asked for a form, jump directly to forms page
+    start_page = "overview"
+    if form_type == "mega":
+        megas = get_mega_forms(species.national_dex)
+        if megas:
+            start_page = "forms"
+
+    text, keyboard = await _build_entry_page(
+        session, species, user.telegram_id, start_page
     )
-    entry = entry_result.scalar_one_or_none()
 
-    # Get user's Pokemon of this species
-    pokemon_result = await session.execute(
-        select(Pokemon)
-        .where(Pokemon.owner_id == user.telegram_id)
-        .where(Pokemon.species_id == species.national_dex)
-        .order_by(Pokemon.level.desc())
-        .limit(5)
+    # Try to send with artwork image (overview only)
+    if start_page == "overview":
+        try:
+            from aiogram.types import BufferedInputFile
+            from telemon.core.imaging import generate_spawn_image
+
+            image_data = await generate_spawn_image(
+                dex_number=species.national_dex,
+                primary_type=species.type1 or "normal",
+                shiny=False,
+            )
+            if image_data:
+                photo = BufferedInputFile(
+                    file=image_data.read(),
+                    filename=f"dex_{species.national_dex}.jpg",
+                )
+                await message.answer_photo(
+                    photo=photo, caption=text,
+                    reply_markup=keyboard.as_markup() if keyboard else None,
+                )
+                return
+        except Exception:
+            pass
+
+    await message.answer(
+        text,
+        reply_markup=keyboard.as_markup() if keyboard else None,
     )
-    user_pokemon = list(pokemon_result.scalars().all())
 
-    # Build response
-    seen = entry.seen if entry else False
-    caught = entry.caught if entry else False
-    caught_shiny = entry.caught_shiny if entry else False
-    times_caught = entry.times_caught if entry else 0
-    first_caught = entry.first_caught_at if entry else None
 
-    # Status
-    if caught:
-        status = "✅ Caught"
-        if caught_shiny:
-            status += " ✨ (Shiny obtained!)"
-    elif seen:
-        status = "👁️ Seen"
+# ──────────────────────────────────────────────────────
+# Paginated single-entry builder
+# ──────────────────────────────────────────────────────
+
+async def _build_entry_page(
+    session: AsyncSession,
+    species: PokemonSpecies,
+    user_id: int,
+    page: str,
+) -> tuple[str, InlineKeyboardBuilder | None]:
+    """Build text + keyboard for a single Pokédex entry page."""
+    if page == "details":
+        return await _entry_page_details(session, species, user_id)
+    elif page == "forms":
+        return _entry_page_forms(species)
     else:
-        status = "❓ Not encountered"
+        return await _entry_page_overview(session, species, user_id)
 
+
+def _entry_nav_keyboard(
+    species_id: int, current_page: str, has_forms: bool = False
+) -> InlineKeyboardBuilder:
+    """Build navigation buttons for entry pages."""
+    builder = InlineKeyboardBuilder()
+    pages = [
+        ("📋 Overview", "overview"),
+        ("📊 Details", "details"),
+    ]
+    if has_forms:
+        pages.append(("🔥 Forms", "forms"))
+
+    for label, page_key in pages:
+        if page_key == current_page:
+            builder.button(text=f"[{label}]", callback_data="dex:noop")
+        else:
+            builder.button(
+                text=label,
+                callback_data=f"dexentry:{species_id}:{page_key}",
+            )
+    builder.adjust(len(pages))
+    return builder
+
+
+async def _entry_page_overview(
+    session: AsyncSession, species: PokemonSpecies, user_id: int
+) -> tuple[str, InlineKeyboardBuilder]:
+    """Page 1: Overview — type, stats, evolution, your Pokemon."""
     # Types
     types = species.type1.title()
     if species.type2:
         types += f" / {species.type2.title()}"
-
-    # Base stats
-    stats_line = (
-        f"HP: {species.base_hp} | ATK: {species.base_attack} | DEF: {species.base_defense}\n"
-        f"SpA: {species.base_sp_attack} | SpD: {species.base_sp_defense} | SPE: {species.base_speed}"
-    )
 
     # Rarity
     rarity = species.rarity.title() if species.rarity else "Common"
@@ -701,15 +800,51 @@ async def pokedex_search(
     elif species.is_mythical:
         rarity = "💫 Mythical"
 
-    # Generation info
     gen_name = GEN_NAMES.get(species.generation, "???")
-    gen_text = f"Gen {species.generation} ({gen_name})"
 
-    # User's Pokemon of this species
-    owned_lines = []
+    # Stats
+    stats_line = (
+        f"HP: {species.base_hp} | ATK: {species.base_attack} | DEF: {species.base_defense}\n"
+        f"SpA: {species.base_sp_attack} | SpD: {species.base_sp_defense} | SPE: {species.base_speed}"
+    )
+
+    # Evolution
+    evo_line = await _build_evolution_chain_text(session, species)
+
+    # User status
+    entry_result = await session.execute(
+        select(PokedexEntry)
+        .where(PokedexEntry.user_id == user_id)
+        .where(PokedexEntry.species_id == species.national_dex)
+    )
+    entry = entry_result.scalar_one_or_none()
+    caught = entry.caught if entry else False
+    seen = entry.seen if entry else False
+    caught_shiny = entry.caught_shiny if entry else False
+    times_caught = entry.times_caught if entry else 0
+
+    if caught:
+        status = f"✅ Caught (×{times_caught})"
+        if caught_shiny:
+            status += " ✨"
+    elif seen:
+        status = "👁️ Seen"
+    else:
+        status = "❓ Not encountered"
+
+    # User's Pokemon
+    pokemon_result = await session.execute(
+        select(Pokemon)
+        .where(Pokemon.owner_id == user_id)
+        .where(Pokemon.species_id == species.national_dex)
+        .order_by(Pokemon.level.desc())
+        .limit(5)
+    )
+    user_pokemon = list(pokemon_result.scalars().all())
     if user_pokemon:
+        owned_lines = []
         for poke in user_pokemon:
-            shiny = "✨" if poke.is_shiny else ""
+            shiny = " ✨" if poke.is_shiny else ""
             owned_lines.append(
                 f"  Lv.{poke.level} | IV: {poke.iv_percentage:.1f}% | {poke.nature.title()}{shiny}"
             )
@@ -717,23 +852,33 @@ async def pokedex_search(
     else:
         owned_text = "  <i>None</i>"
 
-    # First caught info
-    first_caught_text = ""
-    if first_caught:
-        first_caught_text = f"\n<b>First Caught:</b> {first_caught.strftime('%Y-%m-%d')}"
+    text = (
+        f"📕 <b>Pokédex #{species.national_dex:03d} — {species.name}</b>\n"
+        f"Type: {types}  |  Gen {species.generation} ({gen_name})\n"
+        f"Rarity: {rarity}\n\n"
+        f"<b>Base Stats</b> (BST: {species.base_stat_total})\n{stats_line}\n\n"
+        f"{evo_line}\n\n"
+        f"<b>Status:</b> {status}\n"
+        f"<b>Your {species.name}:</b>\n{owned_text}"
+    )
 
-    # Height & Weight (stored as decimeters / hectograms)
+    has_forms = bool(get_mega_forms(species.national_dex))
+    keyboard = _entry_nav_keyboard(species.national_dex, "overview", has_forms)
+    return text, keyboard
+
+
+async def _entry_page_details(
+    session: AsyncSession, species: PokemonSpecies, user_id: int
+) -> tuple[str, InlineKeyboardBuilder]:
+    """Page 2: Details — abilities, gender, egg groups, catch rate."""
     height_m = species.height / 10
     weight_kg = species.weight / 10
-    hw_line = f"Height: {height_m:.1f} m | Weight: {weight_kg:.1f} kg"
 
-    # Abilities
     ability_parts = [a.replace("-", " ").title() for a in (species.abilities or [])]
     if species.hidden_ability:
         ability_parts.append(f"{species.hidden_ability.replace('-', ' ').title()} (Hidden)")
     abilities_line = ", ".join(ability_parts) if ability_parts else "Unknown"
 
-    # Gender ratio
     if species.gender_ratio is None:
         gender_line = "Genderless"
     else:
@@ -741,61 +886,115 @@ async def pokedex_search(
         male = 100 - female
         gender_line = f"♂ {male:.0f}% / ♀ {female:.0f}%"
 
-    # Egg groups
     egg_groups = [eg.replace("-", " ").title() for eg in (species.egg_groups or [])]
     egg_line = " / ".join(egg_groups) if egg_groups else "Undiscovered"
 
-    # Catch rate (rough %)
     catch_pct = round(species.catch_rate / 255 * 100, 1)
-    catch_line = f"{species.catch_rate} ({catch_pct}%)"
 
-    # Evolution chain
-    evo_line = await _build_evolution_chain_text(session, species)
+    # First caught date
+    entry_result = await session.execute(
+        select(PokedexEntry)
+        .where(PokedexEntry.user_id == user_id)
+        .where(PokedexEntry.species_id == species.national_dex)
+    )
+    entry = entry_result.scalar_one_or_none()
+    first_caught = entry.first_caught_at if entry else None
+    first_caught_text = first_caught.strftime("%Y-%m-%d") if first_caught else "—"
 
-    # Flavor text
-    flavor = ""
-    if species.flavor_text:
-        flavor = f"\n<i>{species.flavor_text}</i>\n"
-
-    caption = (
-        f"📕 <b>Pokédex Entry #{species.national_dex:03d}</b>\n\n"
-        f"<b>{species.name}</b>\n"
-        f"Type: {types}  |  {gen_text}\n"
-        f"Rarity: {rarity}\n"
-        f"{hw_line}\n"
-        f"{flavor}\n"
+    text = (
+        f"📕 <b>#{species.national_dex:03d} — {species.name} (Details)</b>\n\n"
+        f"<b>Height:</b> {height_m:.1f} m\n"
+        f"<b>Weight:</b> {weight_kg:.1f} kg\n"
         f"<b>Abilities:</b> {abilities_line}\n"
         f"<b>Gender:</b> {gender_line}\n"
         f"<b>Egg Groups:</b> {egg_line}\n"
-        f"<b>Catch Rate:</b> {catch_line}\n\n"
-        f"<b>Base Stats</b> (BST: {species.base_stat_total})\n{stats_line}\n\n"
-        f"{evo_line}\n"
-        f"<b>Status:</b> {status}\n"
-        f"<b>Times Caught:</b> {times_caught}{first_caught_text}\n\n"
-        f"<b>Your {species.name}:</b>\n{owned_text}"
+        f"<b>Catch Rate:</b> {species.catch_rate} ({catch_pct}%)\n"
+        f"<b>First Caught:</b> {first_caught_text}"
     )
 
-    # Try to send with artwork image
-    try:
-        from aiogram.types import BufferedInputFile
-        from telemon.core.imaging import generate_spawn_image
+    has_forms = bool(get_mega_forms(species.national_dex))
+    keyboard = _entry_nav_keyboard(species.national_dex, "details", has_forms)
+    return text, keyboard
 
-        image_data = await generate_spawn_image(
-            dex_number=species.national_dex,
-            primary_type=species.type1 or "normal",
-            shiny=False,
-        )
-        if image_data:
-            photo = BufferedInputFile(
-                file=image_data.read(),
-                filename=f"dex_{species.national_dex}.jpg",
+
+def _entry_page_forms(
+    species: PokemonSpecies,
+) -> tuple[str, InlineKeyboardBuilder]:
+    """Page 3: Forms — Mega evolutions (and future regional forms)."""
+    mega_forms = get_mega_forms(species.national_dex)
+
+    lines = [f"📕 <b>#{species.national_dex:03d} — {species.name} (Forms)</b>\n"]
+
+    if mega_forms:
+        for mf in mega_forms:
+            types = mf.type1.title()
+            if mf.type2:
+                types += f" / {mf.type2.title()}"
+            bst = mf.base_hp + mf.base_attack + mf.base_defense + mf.base_sp_attack + mf.base_sp_defense + mf.base_speed
+            stone_text = f"  Stone: {mf.mega_stone_display}" if mf.mega_stone_display else ""
+            lines.append(
+                f"🔥 <b>{mf.form_name}</b>\n"
+                f"  Type: {types}\n"
+                f"  Ability: {mf.ability}\n"
+                f"  Stats (BST: {bst})\n"
+                f"  HP: {mf.base_hp} | ATK: {mf.base_attack} | DEF: {mf.base_defense}\n"
+                f"  SpA: {mf.base_sp_attack} | SpD: {mf.base_sp_defense} | SPE: {mf.base_speed}\n"
+                f"{stone_text}"
             )
-            await message.answer_photo(photo=photo, caption=caption)
-            return
-    except Exception:
-        pass  # Fall back to text-only
+    else:
+        lines.append("<i>No alternate forms available.</i>")
 
-    await message.answer(caption)
+    keyboard = _entry_nav_keyboard(species.national_dex, "forms", has_forms=True)
+    return "\n".join(lines), keyboard
+
+
+@router.callback_query(F.data.startswith("dexentry:"))
+async def handle_dexentry_callback(
+    callback: CallbackQuery, session: AsyncSession, user: User
+) -> None:
+    """Handle pagination between entry pages (overview/details/forms)."""
+    parts = (callback.data or "").split(":")
+    if len(parts) < 3:
+        await callback.answer("Invalid callback")
+        return
+
+    try:
+        species_id = int(parts[1])
+    except ValueError:
+        await callback.answer("Invalid species")
+        return
+
+    page = parts[2]
+    if page not in ("overview", "details", "forms"):
+        await callback.answer("Invalid page")
+        return
+
+    result = await session.execute(
+        select(PokemonSpecies).where(PokemonSpecies.national_dex == species_id)
+    )
+    species = result.scalar_one_or_none()
+    if not species:
+        await callback.answer("Species not found")
+        return
+
+    text, keyboard = await _build_entry_page(session, species, user.telegram_id, page)
+
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard.as_markup() if keyboard else None,
+        )
+    except Exception:
+        # If message has a photo, edit_caption instead
+        try:
+            await callback.message.edit_caption(
+                caption=text,
+                reply_markup=keyboard.as_markup() if keyboard else None,
+            )
+        except Exception:
+            pass
+
+    await callback.answer()
 
 
 async def pokedex_help(message: Message) -> None:

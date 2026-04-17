@@ -16,14 +16,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy application code and configs first!
+# Copy application configs first
 COPY pyproject.toml README.md alembic.ini ./
-COPY src/ ./src/
-COPY alembic/ ./alembic/
 
-# NOW install Python dependencies and the bot itself
-RUN pip install --upgrade pip && \
-    pip install .
+# Create a minimal directory structure to trick pip into installing dependencies only
+RUN mkdir -p src/telemon && touch src/telemon/__init__.py && \
+    pip install --upgrade pip && \
+    pip install -e .
+
+# NOW copy the actual source code (changes to src won't invalidate the pip cache above)
+COPY src/ ./src/
+COPY data/ ./data/
+COPY alembic/ ./alembic/
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash telemon && \

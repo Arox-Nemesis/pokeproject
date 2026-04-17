@@ -19,7 +19,7 @@ from telemon.logging import get_logger
 logger = get_logger(__name__)
 
 # Cache directory for generated spawn images
-CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "spawn_cache"
+CACHE_DIR = Path(__file__).parent.parent.parent.parent.parent / "data" / "spawn_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Official artwork base URL (475x475, transparent PNG)

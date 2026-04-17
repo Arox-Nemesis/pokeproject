@@ -347,7 +347,7 @@ async def cmd_inventory(message: Message, session: AsyncSession, user: User) -> 
             for item_id, item_name, qty in categories[cat_key]:
                 lines.append(f"  <code>{item_id}</code> {item_name} x{qty}")
 
-    lines.append("\n<i>Use /use [item_id] [pokemon#] [qty|max] to use an item.\nUse /sell [item_id] [qty|max] to sell items.</i>")
+    lines.append("\n<i>Use /use [item_id] [qty|max] [pokemon#] to use an item.\nUse /sell [item_id] [qty|max] to sell items.</i>")
 
     await message.answer("\n".join(lines))
 
@@ -375,8 +375,8 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
     Syntax:
         /use <item_id>                      — use 1 on selected Pokemon
-        /use <item_id> <pokemon#>           — use 1 on Pokemon #N
-        /use <item_id> <pokemon#> <qty|max> — use qty (or max possible)
+        /use <item_id> <qty|max>            — use qty on selected Pokemon
+        /use <item_id> <qty|max> <pokemon#> — use qty on Pokemon #N
     """
     if not message.text:
         return
@@ -385,11 +385,12 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
     if len(args) < 2:
         await message.answer(
             "Please specify an item ID to use!\n"
-            "Usage: /use [item_id] [pokemon#] [qty|max]\n\n"
+            "Usage: /use [item_id] [qty|max] [pokemon#]\n\n"
             "<b>Examples:</b>\n"
-            "/use 201 1 — use 1 Rare Candy on Pokemon #1\n"
-            "/use 201 1 20 — use 20 Rare Candies on Pokemon #1\n"
-            "/use 201 1 max — use as many as possible\n"
+            "/use 201 — use 1 Rare Candy on selected Pokemon\n"
+            "/use 201 20 — use 20 Rare Candies on selected Pokemon\n"
+            "/use 201 20 3 — use 20 Rare Candies on Pokemon #3\n"
+            "/use 201 max — use as many as possible\n"
             "/use 29 — use Linking Cord on selected Pokemon"
         )
         return
@@ -403,15 +404,6 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             "Use /inventory to see your items."
         )
         return
-
-    # Parse optional pokemon index
-    pokemon_idx = None
-    if len(args) >= 3:
-        try:
-            pokemon_idx = int(args[2])
-        except ValueError:
-            await message.answer("Invalid Pokemon number! Use a number.")
-            return
 
     # Check if user has this item
     inv_result = await session.execute(
@@ -429,17 +421,28 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         )
         return
 
-    # Parse optional quantity (3rd arg after pokemon#)
+    # Parse optional quantity (arg 2) and pokemon index (arg 3)
+    # Format: /use <id> [qty|max] [pokemon#]
     use_qty = 1
-    if len(args) >= 4:
-        parsed = _parse_quantity(args[3], inventory_item.quantity)
-        if parsed is None:
+    pokemon_idx = None
+
+    if len(args) >= 3:
+        parsed = _parse_quantity(args[2], inventory_item.quantity)
+        if parsed is not None:
+            use_qty = parsed
+        else:
             await message.answer(
                 "Invalid quantity! Use a number or 'max'.\n"
-                "Example: /use 201 1 20  or  /use 201 1 max"
+                "Example: /use 201 20  or  /use 201 max"
             )
             return
-        use_qty = parsed
+
+    if len(args) >= 4:
+        try:
+            pokemon_idx = int(args[3])
+        except ValueError:
+            await message.answer("Invalid Pokemon number! Use a number.\nExample: /use 201 20 3")
+            return
 
     # Get item details
     item_result = await session.execute(
@@ -460,7 +463,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         if poke is None:
             await message.answer(
                 f"Please specify which Pokemon to use {item.name} on!\n"
-                f"Usage: /use {item_id} [pokemon#]\n"
+                f"Usage: /use {item_id} 1 [pokemon#]\n"
                 f"Or select a Pokemon first with /select [number]"
             )
             return
@@ -507,11 +510,11 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         if poke is None:
             await message.answer(
                 "Please specify which Pokemon to use Rare Candy on!\n"
-                "Usage: /use 201 [pokemon#] [qty|max]\n\n"
+                "Usage: /use 201 [qty|max] [pokemon#]\n\n"
                 "<b>Examples:</b>\n"
-                "/use 201 1 — use 1 on Pokemon #1\n"
-                "/use 201 1 20 — use 20 at once\n"
-                "/use 201 1 max — use as many as possible"
+                "/use 201 20 — use 20 on selected Pokemon\n"
+                "/use 201 20 3 — use 20 on Pokemon #3\n"
+                "/use 201 max — use as many as possible"
             )
             return
 
@@ -572,7 +575,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         if poke is None:
             await message.answer(
                 "Please specify which Pokemon to give the Soothe Bell to!\n"
-                "Usage: /use 30 [pokemon#]"
+                "Usage: /use 30 1 [pokemon#]"
             )
             return
 
@@ -611,7 +614,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         if poke is None:
             await message.answer(
                 f"Please specify which Pokemon to give {item.name} to!\n"
-                f"Usage: /use {item_id} [pokemon#]"
+                f"Usage: /use {item_id} 1 [pokemon#]"
             )
             return
 
