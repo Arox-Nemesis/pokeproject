@@ -251,11 +251,42 @@ async def cmd_pokemon(message: Message, session: AsyncSession, user: User) -> No
     filter_text = f" [{', '.join(filter_parts)}]" if filter_parts else ""
     sort_text = f" sorted by {order}" if order != "recent" else ""
 
+    # Determine if any filters are active
+    has_filter = (
+        args["shiny"] or args["legendary"] or args["mythical"]
+        or args["favorites"] or args["name"] or args["type"] or args["gen"]
+    )
+
+    # When filters are active, compute real inventory indices via ROW_NUMBER()
+    real_indices: dict[str, int] = {}
+    if has_filter and pokemon_list:
+        row_num_sq = (
+            select(
+                Pokemon.id,
+                func.row_number()
+                .over(order_by=Pokemon.caught_at.asc())
+                .label("inv_idx"),
+            )
+            .where(Pokemon.owner_id == user.telegram_id)
+            .subquery()
+        )
+        poke_ids = [p.id for p in pokemon_list]
+        idx_result = await session.execute(
+            select(row_num_sq.c.id, row_num_sq.c.inv_idx).where(
+                row_num_sq.c.id.in_(poke_ids)
+            )
+        )
+        real_indices = {str(row.id): int(row.inv_idx) for row in idx_result}
+
     # Build response
     lines = [f"<b>Your Pokemon</b> ({total_count} total){filter_text}{sort_text}\n"]
 
     for i, poke in enumerate(pokemon_list):
-        idx = offset + i + 1
+        # Use real inventory index when filters are active, else sequential
+        if has_filter:
+            idx = real_indices.get(str(poke.id), offset + i + 1)
+        else:
+            idx = offset + i + 1
         shiny = "✨ " if poke.is_shiny else ""
         fav = "❤️ " if poke.is_favorite else ""
         
