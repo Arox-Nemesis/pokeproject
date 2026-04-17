@@ -94,6 +94,28 @@ def parse_pokemon_args(text: str) -> dict:
     return args
 
 
+def _build_filter_string(args: dict) -> str:
+    """Build a compact filter string from parsed args for callback data."""
+    parts = []
+    if args["shiny"]:
+        parts.append("shiny")
+    if args["legendary"]:
+        parts.append("leg")
+    if args["mythical"]:
+        parts.append("myth")
+    if args["favorites"]:
+        parts.append("fav")
+    if args["name"]:
+        parts.append(f"n:{args['name']}")
+    if args["type"]:
+        parts.append(f"t:{args['type']}")
+    if args["gen"]:
+        parts.append(f"g:{args['gen']}")
+    if args["order"] != "recent":
+        parts.append(f"o:{args['order']}")
+    return " ".join(parts)
+
+
 async def get_user_pokemon_by_index(
     session: AsyncSession, user_id: int, index: int
 ) -> Pokemon | None:
@@ -307,16 +329,19 @@ async def cmd_pokemon(message: Message, session: AsyncSession, user: User) -> No
         )
 
     # Pagination info
+    filter_str = _build_filter_string(args)
     if total_pages > 1:
         lines.append(f"\nPage {page}/{total_pages}")
-        lines.append(f"<i>Use /pokemon {page + 1} for next page</i>" if page < total_pages else "")
+        hint_filters = f" {filter_str}" if filter_str else ""
+        lines.append(f"<i>Use /pokemon {page + 1}{hint_filters} for next page</i>" if page < total_pages else "")
 
-    # Build pagination keyboard
+    # Build pagination keyboard — encode filters in callback data
+    cb_filter = f":{filter_str}" if filter_str else ""
     builder = InlineKeyboardBuilder()
     if page > 1:
-        builder.button(text="◀️ Prev", callback_data=f"pokemon:page:{page - 1}")
+        builder.button(text="◀️ Prev", callback_data=f"pokemon:page:{page - 1}{cb_filter}")
     if page < total_pages:
-        builder.button(text="Next ▶️", callback_data=f"pokemon:page:{page + 1}")
+        builder.button(text="Next ▶️", callback_data=f"pokemon:page:{page + 1}{cb_filter}")
     builder.adjust(2)
 
     await message.answer("\n".join(lines), reply_markup=builder.as_markup() if total_pages > 1 else None)
@@ -604,15 +629,60 @@ async def callback_pokemon_page(
     if not callback.data:
         return
 
-    page = int(callback.data.split(":")[2])
+    # Parse page and optional filter string from callback data
+    # Format: pokemon:page:{page} or pokemon:page:{page}:{filter_string}
+    parts = callback.data.split(":", 3)
+    page = int(parts[2])
+    filter_str = parts[3] if len(parts) > 3 else ""
+    args = parse_pokemon_args(filter_str)
+    args["page"] = page
 
-    # Rebuild the query (default filters, just pagination)
+    # Rebuild the query with filters
     query = (
         select(Pokemon)
         .where(Pokemon.owner_id == user.telegram_id)
         .join(PokemonSpecies, Pokemon.species_id == PokemonSpecies.national_dex)
-        .order_by(Pokemon.caught_at.asc())
     )
+
+    # Apply filters
+    if args["shiny"]:
+        query = query.where(Pokemon.is_shiny == True)
+    if args["legendary"]:
+        query = query.where(PokemonSpecies.is_legendary == True)
+    if args["mythical"]:
+        query = query.where(PokemonSpecies.is_mythical == True)
+    if args["favorites"]:
+        query = query.where(Pokemon.is_favorite == True)
+    if args["name"]:
+        query = query.where(PokemonSpecies.name_lower.contains(args["name"]))
+    if args["type"]:
+        query = query.where(
+            (PokemonSpecies.type1 == args["type"]) | (PokemonSpecies.type2 == args["type"])
+        )
+    if args["gen"]:
+        query = query.where(PokemonSpecies.generation == args["gen"])
+
+    # Apply sorting
+    order = args["order"]
+    if order == "iv":
+        query = query.order_by(
+            (
+                Pokemon.iv_hp
+                + Pokemon.iv_attack
+                + Pokemon.iv_defense
+                + Pokemon.iv_sp_attack
+                + Pokemon.iv_sp_defense
+                + Pokemon.iv_speed
+            ).desc()
+        )
+    elif order == "level":
+        query = query.order_by(Pokemon.level.desc())
+    elif order == "dex":
+        query = query.order_by(PokemonSpecies.national_dex.asc())
+    elif order == "name":
+        query = query.order_by(PokemonSpecies.name.asc())
+    else:  # recent (default)
+        query = query.order_by(Pokemon.caught_at.asc())
 
     # Get total count
     count_query = select(func.count()).select_from(query.subquery())
@@ -626,10 +696,61 @@ async def callback_pokemon_page(
     result = await session.execute(query.offset(offset).limit(POKEMON_PER_PAGE))
     pokemon_list = result.scalars().all()
 
-    lines = [f"<b>Your Pokemon</b> ({total_count} total)\n"]
+    # Determine if any filters are active
+    has_filter = (
+        args["shiny"] or args["legendary"] or args["mythical"]
+        or args["favorites"] or args["name"] or args["type"] or args["gen"]
+    )
+
+    # Build active filter description
+    filter_parts = []
+    if args["shiny"]:
+        filter_parts.append("shiny")
+    if args["legendary"]:
+        filter_parts.append("legendary")
+    if args["mythical"]:
+        filter_parts.append("mythical")
+    if args["favorites"]:
+        filter_parts.append("favorites")
+    if args["type"]:
+        filter_parts.append(f"type:{args['type']}")
+    if args["gen"]:
+        filter_parts.append(f"gen:{args['gen']}")
+    if args["name"]:
+        filter_parts.append(f"name:{args['name']}")
+
+    filter_text = f" [{', '.join(filter_parts)}]" if filter_parts else ""
+    sort_text = f" sorted by {order}" if order != "recent" else ""
+
+    # When filters are active, compute real inventory indices via ROW_NUMBER()
+    real_indices: dict[str, int] = {}
+    if has_filter and pokemon_list:
+        row_num_sq = (
+            select(
+                Pokemon.id,
+                func.row_number()
+                .over(order_by=Pokemon.caught_at.asc())
+                .label("inv_idx"),
+            )
+            .where(Pokemon.owner_id == user.telegram_id)
+            .subquery()
+        )
+        poke_ids = [p.id for p in pokemon_list]
+        idx_result = await session.execute(
+            select(row_num_sq.c.id, row_num_sq.c.inv_idx).where(
+                row_num_sq.c.id.in_(poke_ids)
+            )
+        )
+        real_indices = {str(row.id): int(row.inv_idx) for row in idx_result}
+
+    lines = [f"<b>Your Pokemon</b> ({total_count} total){filter_text}{sort_text}\n"]
 
     for i, poke in enumerate(pokemon_list):
-        idx = offset + i + 1
+        # Use real inventory index when filters are active, else sequential
+        if has_filter:
+            idx = real_indices.get(str(poke.id), offset + i + 1)
+        else:
+            idx = offset + i + 1
         shiny = "✨ " if poke.is_shiny else ""
         fav = "❤️ " if poke.is_favorite else ""
         
@@ -649,11 +770,14 @@ async def callback_pokemon_page(
     if total_pages > 1:
         lines.append(f"\nPage {page}/{total_pages}")
 
+    # Rebuild filter string and encode in callback data
+    cb_filter_str = _build_filter_string(args)
+    cb_filter = f":{cb_filter_str}" if cb_filter_str else ""
     builder = InlineKeyboardBuilder()
     if page > 1:
-        builder.button(text="◀️ Prev", callback_data=f"pokemon:page:{page - 1}")
+        builder.button(text="◀️ Prev", callback_data=f"pokemon:page:{page - 1}{cb_filter}")
     if page < total_pages:
-        builder.button(text="Next ▶️", callback_data=f"pokemon:page:{page + 1}")
+        builder.button(text="Next ▶️", callback_data=f"pokemon:page:{page + 1}{cb_filter}")
     builder.adjust(2)
 
     await callback.message.edit_text(
