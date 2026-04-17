@@ -1,5 +1,7 @@
 """Shop, inventory, and item usage handlers."""
 
+from datetime import datetime
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
@@ -27,6 +29,10 @@ logger = get_logger(__name__)
 # Friendship gain from /pet
 PET_FRIENDSHIP_GAIN = 5
 SOOTHE_BELL_MULTIPLIER = 2
+PET_COOLDOWN_SECONDS = 1800  # 30 minutes cooldown between /pet uses
+
+# In-memory cooldown tracking for /pet
+_pet_cooldowns: dict[int, datetime] = {}
 
 # ──────────────────────────────────────────────
 # Shop category data (inline keyboard navigation)
@@ -438,11 +444,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             return
 
     if len(args) >= 4:
-        try:
-            pokemon_idx = int(args[3])
-        except ValueError:
-            await message.answer("Invalid Pokemon number! Use a number.\nExample: /use 201 20 3")
-            return
+        pokemon_idx = args[3]  # Pass as string; _resolve_use_target handles l/latest/0
 
     # Get item details
     item_result = await session.execute(
@@ -769,11 +771,23 @@ async def cmd_sell(message: Message, session: AsyncSession, user: User) -> None:
 @router.message(Command("pet"))
 async def cmd_pet(message: Message, session: AsyncSession, user: User) -> None:
     """Handle /pet command to increase friendship of selected Pokemon."""
+    # Check cooldown
+    now = datetime.utcnow()
+    if user.telegram_id in _pet_cooldowns:
+        elapsed = (now - _pet_cooldowns[user.telegram_id]).total_seconds()
+        if elapsed < PET_COOLDOWN_SECONDS:
+            remaining = int(PET_COOLDOWN_SECONDS - elapsed)
+            mins, secs = divmod(remaining, 60)
+            await message.answer(f"You can pet again in {mins}m {secs}s!")
+            return
+
+    _pet_cooldowns[user.telegram_id] = now
+
     text = message.text or ""
     args = text.split()
 
     arg = args[1] if len(args) >= 2 else None
-    poke = await _resolve_use_target(session, user, int(arg) if arg and arg.isdigit() else None)
+    poke = await _resolve_use_target(session, user, arg)
 
     if not poke:
         await message.answer(
@@ -827,21 +841,40 @@ async def cmd_pet(message: Message, session: AsyncSession, user: User) -> None:
 
 
 async def _resolve_use_target(
-    session: AsyncSession, user: User, pokemon_idx: int | None
+    session: AsyncSession, user: User, pokemon_idx: int | str | None
 ) -> Pokemon | None:
-    """Resolve a Pokemon target by index or selected Pokemon."""
-    if pokemon_idx is not None:
-        # Get by index
-        poke_result = await session.execute(
-            select(Pokemon)
-            .where(Pokemon.owner_id == user.telegram_id)
-            .order_by(Pokemon.caught_at.asc())
-        )
-        pokemon_list = list(poke_result.scalars().all())
+    """Resolve a Pokemon target by index, 'l'/'latest' for latest, '0' for selected."""
+    LATEST_ALIASES = {"l", "-l", "--latest", "-latest", "latest"}
 
-        if pokemon_idx < 1 or pokemon_idx > len(pokemon_list):
-            return None
-        return pokemon_list[pokemon_idx - 1]
+    if pokemon_idx is not None:
+        # Normalize string to int or alias
+        if isinstance(pokemon_idx, str):
+            if pokemon_idx.lower() in LATEST_ALIASES:
+                result = await session.execute(
+                    select(Pokemon)
+                    .where(Pokemon.owner_id == user.telegram_id)
+                    .order_by(Pokemon.caught_at.desc())
+                    .limit(1)
+                )
+                return result.scalar_one_or_none()
+            elif pokemon_idx == "0":
+                pass  # Fall through to selected Pokemon
+            elif pokemon_idx.isdigit():
+                pokemon_idx = int(pokemon_idx)
+            else:
+                return None
+
+        if isinstance(pokemon_idx, int) and pokemon_idx > 0:
+            poke_result = await session.execute(
+                select(Pokemon)
+                .where(Pokemon.owner_id == user.telegram_id)
+                .order_by(Pokemon.caught_at.asc())
+            )
+            pokemon_list = list(poke_result.scalars().all())
+
+            if pokemon_idx < 1 or pokemon_idx > len(pokemon_list):
+                return None
+            return pokemon_list[pokemon_idx - 1]
 
     # Use selected Pokemon
     if user.selected_pokemon_id:

@@ -21,13 +21,27 @@ logger = get_logger(__name__)
 
 
 async def get_active_trade(session: AsyncSession, user_id: int) -> Trade | None:
-    """Get active trade for a user."""
+    """Get active trade for a user (includes waiting-for-accept trades)."""
     result = await session.execute(
         select(Trade)
         .where(
             or_(Trade.user1_id == user_id, Trade.user2_id == user_id)
         )
-        .where(Trade.status.in_([TradeStatus.PENDING, TradeStatus.CONFIRMED_ONE]))
+        .where(Trade.status.in_([
+            TradeStatus.WAITING_ACCEPT,
+            TradeStatus.PENDING,
+            TradeStatus.CONFIRMED_ONE,
+        ]))
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_pending_invite(session: AsyncSession, user_id: int) -> Trade | None:
+    """Get a trade invite waiting for this user to accept."""
+    result = await session.execute(
+        select(Trade)
+        .where(Trade.user2_id == user_id)
+        .where(Trade.status == TradeStatus.WAITING_ACCEPT)
     )
     return result.scalar_one_or_none()
 
@@ -129,14 +143,17 @@ async def cmd_trade(message: Message, session: AsyncSession, user: User) -> None
         await message.answer(
             "<b>Trading System</b>\n\n"
             "<b>Commands:</b>\n"
-            "/trade @username - Start trade with user\n"
+            "/trade @username - Send trade request\n"
+            "/trade accept - Accept incoming trade request\n"
+            "/trade reject - Reject incoming trade request\n"
             "/trade add <id> - Add Pokemon to trade\n"
             "/trade remove <id> - Remove Pokemon from trade\n"
             f"/trade coins [amount] - Add {CURRENCY_NAME}\n"
             "/trade confirm - Confirm the trade\n"
             "/trade cancel - Cancel the trade\n"
             "/trade status - View current trade\n\n"
-            "<i>Both parties must /trade confirm to complete</i>"
+            "<i>Both parties must /trade confirm to complete</i>\n"
+            "<i>⏳ Trades auto-cancel after 5 min of inactivity</i>"
         )
         return
 
@@ -148,7 +165,11 @@ async def cmd_trade(message: Message, session: AsyncSession, user: User) -> None
         return
 
     # Handle subcommands
-    if subcommand == "add":
+    if subcommand == "accept":
+        await trade_accept(message, session, user)
+    elif subcommand == "reject":
+        await trade_reject(message, session, user)
+    elif subcommand == "add":
         await trade_add_pokemon(message, session, user, args[2:])
     elif subcommand == "remove":
         await trade_remove_pokemon(message, session, user, args[2:])
@@ -166,7 +187,7 @@ async def cmd_trade(message: Message, session: AsyncSession, user: User) -> None
             await start_trade_by_id(message, session, user, int(subcommand))
         else:
             await message.answer(
-                " Unknown trade command. Use /trade for help."
+                "❌ Unknown trade command. Use /trade for help."
             )
 
 
@@ -208,31 +229,37 @@ async def start_trade(
         )
         return
 
-    # Create new trade
+    # Create new trade in WAITING_ACCEPT state
     trade = Trade(
         user1_id=user.telegram_id,
         user2_id=target_user.telegram_id,
         user1_pokemon_ids=[],
         user2_pokemon_ids=[],
         chat_id=message.chat.id,
+        status=TradeStatus.WAITING_ACCEPT,
     )
     session.add(trade)
     await session.commit()
 
     logger.info(
-        "Trade started",
+        "Trade invite sent",
         user1_id=user.telegram_id,
         user2_id=target_user.telegram_id,
         trade_id=str(trade.id),
     )
 
+    # Build accept/reject keyboard
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Accept", callback_data=f"trade:accept:{trade.id}")
+    builder.button(text="❌ Reject", callback_data=f"trade:reject:{trade.id}")
+    builder.adjust(2)
+
     await message.answer(
-        f" <b>Trade Started!</b>\n\n"
+        f"📨 <b>Trade Request Sent!</b>\n\n"
         f"@{user.username or 'You'} wants to trade with @{target_username}\n\n"
-        "Use /trade add [pokemon_id] to add Pokemon\n"
-        f"Use /trade coins [amount] to add {CURRENCY_NAME}\n"
-        "Use /trade confirm when ready\n"
-        "Use /trade cancel to abort"
+        f"@{target_username} — use the buttons below or /trade accept / /trade reject\n"
+        "<i>⏳ This request expires in 5 minutes</i>",
+        reply_markup=builder.as_markup(),
     )
 
 
@@ -274,13 +301,14 @@ async def start_trade_by_id(
         )
         return
 
-    # Create new trade
+    # Create new trade in WAITING_ACCEPT state
     trade = Trade(
         user1_id=user.telegram_id,
         user2_id=target_user.telegram_id,
         user1_pokemon_ids=[],
         user2_pokemon_ids=[],
         chat_id=message.chat.id,
+        status=TradeStatus.WAITING_ACCEPT,
     )
     session.add(trade)
     await session.commit()
@@ -288,19 +316,24 @@ async def start_trade_by_id(
     target_name = target_user.username or f"User {target_id}"
 
     logger.info(
-        "Trade started",
+        "Trade invite sent",
         user1_id=user.telegram_id,
         user2_id=target_user.telegram_id,
         trade_id=str(trade.id),
     )
 
+    # Build accept/reject keyboard
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Accept", callback_data=f"trade:accept:{trade.id}")
+    builder.button(text="❌ Reject", callback_data=f"trade:reject:{trade.id}")
+    builder.adjust(2)
+
     await message.answer(
-        f" <b>Trade Started!</b>\n\n"
+        f"📨 <b>Trade Request Sent!</b>\n\n"
         f"You want to trade with @{target_name}\n\n"
-        "Use /trade add [pokemon_id] to add Pokemon\n"
-        f"Use /trade coins [amount] to add {CURRENCY_NAME}\n"
-        "Use /trade confirm when ready\n"
-        "Use /trade cancel to abort"
+        f"@{target_name} — use the buttons below or /trade accept / /trade reject\n"
+        "<i>⏳ This request expires in 5 minutes</i>",
+        reply_markup=builder.as_markup(),
     )
 
 
@@ -315,7 +348,12 @@ async def trade_add_pokemon(
     # Get active trade
     trade = await get_active_trade(session, user.telegram_id)
     if not trade:
-        await message.answer(" You don't have an active trade!")
+        await message.answer("❌ You don't have an active trade!")
+        return
+
+    # Block actions while waiting for accept
+    if trade.status == TradeStatus.WAITING_ACCEPT:
+        await message.answer("⏳ Waiting for the other player to accept the trade request.")
         return
 
     # Get user's Pokemon list
@@ -337,6 +375,16 @@ async def trade_add_pokemon(
         return
 
     poke = pokemon_list[pokemon_idx - 1]
+
+    # Check if Pokemon is favorited
+    if poke.is_favorite:
+        await message.answer(f"❌ {poke.species.name} is favorited! Unfavorite it first.")
+        return
+
+    # Check if Pokemon is the user's selected Pokemon
+    if str(poke.id) == user.selected_pokemon_id:
+        await message.answer(f"❌ {poke.species.name} is your selected Pokemon! Select a different one first.")
+        return
 
     # Check if Pokemon is tradeable
     if not poke.is_tradeable:
@@ -368,8 +416,9 @@ async def trade_add_pokemon(
         trade.user1_confirmed = False
         trade.user2_confirmed = False
 
-    # Mark Pokemon as in trade
+    # Mark Pokemon as in trade and update activity
     poke.is_in_trade = True
+    trade.last_activity_at = datetime.utcnow()
     await session.commit()
 
     shiny = " " if poke.is_shiny else ""
@@ -390,7 +439,12 @@ async def trade_remove_pokemon(
     # Get active trade
     trade = await get_active_trade(session, user.telegram_id)
     if not trade:
-        await message.answer(" You don't have an active trade!")
+        await message.answer("❌ You don't have an active trade!")
+        return
+
+    # Block actions while waiting for accept
+    if trade.status == TradeStatus.WAITING_ACCEPT:
+        await message.answer("⏳ Waiting for the other player to accept the trade request.")
         return
 
     # Get user's Pokemon list
@@ -429,8 +483,9 @@ async def trade_remove_pokemon(
         trade.user1_confirmed = False
         trade.user2_confirmed = False
 
-    # Unmark Pokemon
+    # Unmark Pokemon and update activity
     poke.is_in_trade = False
+    trade.last_activity_at = datetime.utcnow()
     await session.commit()
 
     await message.answer(
@@ -450,7 +505,12 @@ async def trade_add_coins(
     # Get active trade
     trade = await get_active_trade(session, user.telegram_id)
     if not trade:
-        await message.answer(" You don't have an active trade!")
+        await message.answer("❌ You don't have an active trade!")
+        return
+
+    # Block actions while waiting for accept
+    if trade.status == TradeStatus.WAITING_ACCEPT:
+        await message.answer("⏳ Waiting for the other player to accept the trade request.")
         return
 
     # Parse amount
@@ -481,6 +541,7 @@ async def trade_add_coins(
         trade.user1_confirmed = False
         trade.user2_confirmed = False
 
+    trade.last_activity_at = datetime.utcnow()
     await session.commit()
 
     await message.answer(
@@ -489,11 +550,81 @@ async def trade_add_coins(
     )
 
 
+async def trade_accept(message: Message, session: AsyncSession, user: User) -> None:
+    """Accept an incoming trade request."""
+    invite = await get_pending_invite(session, user.telegram_id)
+    if not invite:
+        await message.answer("❌ You don't have any pending trade requests!")
+        return
+
+    # Transition to active PENDING state
+    invite.status = TradeStatus.PENDING
+    invite.last_activity_at = datetime.utcnow()
+    await session.commit()
+
+    # Get initiator name
+    user1_result = await session.execute(
+        select(User).where(User.telegram_id == invite.user1_id)
+    )
+    user1 = user1_result.scalar_one_or_none()
+    user1_name = user1.username or f"User {invite.user1_id}" if user1 else f"User {invite.user1_id}"
+
+    logger.info(
+        "Trade accepted",
+        user1_id=invite.user1_id,
+        user2_id=user.telegram_id,
+        trade_id=str(invite.id),
+    )
+
+    await message.answer(
+        f"✅ <b>Trade Accepted!</b>\n\n"
+        f"@{user.username or 'You'} accepted the trade with @{user1_name}\n\n"
+        "Use /trade add [pokemon_id] to add Pokemon\n"
+        f"Use /trade coins [amount] to add {CURRENCY_NAME}\n"
+        "Use /trade confirm when ready\n"
+        "Use /trade cancel to abort"
+    )
+
+
+async def trade_reject(message: Message, session: AsyncSession, user: User) -> None:
+    """Reject an incoming trade request."""
+    invite = await get_pending_invite(session, user.telegram_id)
+    if not invite:
+        await message.answer("❌ You don't have any pending trade requests!")
+        return
+
+    invite.status = TradeStatus.CANCELLED
+    await session.commit()
+
+    # Get initiator name
+    user1_result = await session.execute(
+        select(User).where(User.telegram_id == invite.user1_id)
+    )
+    user1 = user1_result.scalar_one_or_none()
+    user1_name = user1.username or f"User {invite.user1_id}" if user1 else f"User {invite.user1_id}"
+
+    logger.info(
+        "Trade rejected",
+        user1_id=invite.user1_id,
+        user2_id=user.telegram_id,
+        trade_id=str(invite.id),
+    )
+
+    await message.answer(
+        f"❌ Trade request from @{user1_name} has been rejected."
+    )
+
+
 async def trade_confirm(message: Message, session: AsyncSession, user: User) -> None:
     """Confirm the trade."""
     trade = await get_active_trade(session, user.telegram_id)
     if not trade:
-        await message.answer(" You don't have an active trade!")
+        await message.answer("❌ You don't have an active trade!")
+        return
+
+    # Block confirm while waiting for accept
+    if trade.status == TradeStatus.WAITING_ACCEPT:
+        await message.answer("⏳ Waiting for the other player to accept the trade request.")
         return
 
     # Set confirmation
@@ -501,6 +632,8 @@ async def trade_confirm(message: Message, session: AsyncSession, user: User) -> 
         trade.user1_confirmed = True
     else:
         trade.user2_confirmed = True
+
+    trade.last_activity_at = datetime.utcnow()
 
     # Check if both confirmed
     if trade.both_confirmed:
@@ -553,6 +686,9 @@ async def execute_trade(message: Message, session: AsyncSession, trade: Trade) -
         )
         poke = result.scalar_one_or_none()
         if poke:
+            # Clear selected_pokemon_id if trading away selected Pokemon
+            if user1.selected_pokemon_id and str(poke.id) == user1.selected_pokemon_id:
+                user1.selected_pokemon_id = None
             poke.owner_id = trade.user2_id
             poke.is_in_trade = False
             traded_pokemon.append((poke, trade.user2_id))
@@ -564,6 +700,9 @@ async def execute_trade(message: Message, session: AsyncSession, trade: Trade) -
         )
         poke = result.scalar_one_or_none()
         if poke:
+            # Clear selected_pokemon_id if trading away selected Pokemon
+            if user2.selected_pokemon_id and str(poke.id) == user2.selected_pokemon_id:
+                user2.selected_pokemon_id = None
             poke.owner_id = trade.user1_id
             poke.is_in_trade = False
             traded_pokemon.append((poke, trade.user1_id))
@@ -746,3 +885,113 @@ async def trade_status(message: Message, session: AsyncSession, user: User) -> N
         return
 
     await message.answer(await format_trade_status(session, trade))
+
+
+# ---- Callback query handlers for inline Accept/Reject buttons ----
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("trade:accept:"))
+async def callback_trade_accept(
+    callback: CallbackQuery, session: AsyncSession, user: User
+) -> None:
+    """Handle trade accept via inline button."""
+    if not callback.data:
+        return
+
+    trade_id = callback.data.split(":")[2]
+
+    result = await session.execute(
+        select(Trade).where(Trade.id == trade_id)
+    )
+    trade = result.scalar_one_or_none()
+
+    if not trade:
+        await callback.answer("Trade not found!", show_alert=True)
+        return
+
+    if trade.user2_id != user.telegram_id:
+        await callback.answer("This trade request is not for you!", show_alert=True)
+        return
+
+    if trade.status != TradeStatus.WAITING_ACCEPT:
+        await callback.answer("This trade request is no longer available!", show_alert=True)
+        return
+
+    # Transition to active PENDING state
+    trade.status = TradeStatus.PENDING
+    trade.last_activity_at = datetime.utcnow()
+    await session.commit()
+
+    # Get initiator name
+    user1_result = await session.execute(
+        select(User).where(User.telegram_id == trade.user1_id)
+    )
+    user1 = user1_result.scalar_one_or_none()
+    user1_name = user1.username or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
+
+    logger.info(
+        "Trade accepted via button",
+        user1_id=trade.user1_id,
+        user2_id=user.telegram_id,
+        trade_id=str(trade.id),
+    )
+
+    await callback.message.edit_text(
+        f"✅ <b>Trade Accepted!</b>\n\n"
+        f"@{user.username or 'You'} accepted the trade with @{user1_name}\n\n"
+        "Use /trade add [pokemon_id] to add Pokemon\n"
+        f"Use /trade coins [amount] to add {CURRENCY_NAME}\n"
+        "Use /trade confirm when ready\n"
+        "Use /trade cancel to abort"
+    )
+    await callback.answer("Trade accepted!")
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("trade:reject:"))
+async def callback_trade_reject(
+    callback: CallbackQuery, session: AsyncSession, user: User
+) -> None:
+    """Handle trade reject via inline button."""
+    if not callback.data:
+        return
+
+    trade_id = callback.data.split(":")[2]
+
+    result = await session.execute(
+        select(Trade).where(Trade.id == trade_id)
+    )
+    trade = result.scalar_one_or_none()
+
+    if not trade:
+        await callback.answer("Trade not found!", show_alert=True)
+        return
+
+    if trade.user2_id != user.telegram_id:
+        await callback.answer("This trade request is not for you!", show_alert=True)
+        return
+
+    if trade.status != TradeStatus.WAITING_ACCEPT:
+        await callback.answer("This trade request is no longer available!", show_alert=True)
+        return
+
+    trade.status = TradeStatus.CANCELLED
+    await session.commit()
+
+    # Get initiator name
+    user1_result = await session.execute(
+        select(User).where(User.telegram_id == trade.user1_id)
+    )
+    user1 = user1_result.scalar_one_or_none()
+    user1_name = user1.username or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
+
+    logger.info(
+        "Trade rejected via button",
+        user1_id=trade.user1_id,
+        user2_id=user.telegram_id,
+        trade_id=str(trade.id),
+    )
+
+    await callback.message.edit_text(
+        f"❌ Trade request from @{user1_name} has been rejected."
+    )
+    await callback.answer("Trade rejected!")

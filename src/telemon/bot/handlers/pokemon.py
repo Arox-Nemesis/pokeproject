@@ -111,11 +111,23 @@ async def get_user_pokemon_by_index(
 async def resolve_pokemon(
     session: AsyncSession, user: User, arg: str | None
 ) -> Pokemon | None:
-    """Resolve a Pokemon from argument (index number or 'latest') or selected Pokemon."""
+    """Resolve a Pokemon from argument (index number, 'l'/'latest', or '0') or selected Pokemon.
+
+    Shortcuts:
+        0        → selected Pokemon
+        l        → most recently caught Pokemon
+        latest   → most recently caught Pokemon
+        -l       → most recently caught Pokemon
+        --latest → most recently caught Pokemon
+        <number> → Pokemon by collection index
+    """
+    LATEST_ALIASES = {"l", "-l", "--latest", "-latest", "latest"}
+
     if arg:
-        if arg.isdigit():
-            return await get_user_pokemon_by_index(session, user.telegram_id, int(arg))
-        elif arg == "latest":
+        if arg == "0":
+            # Explicit selected Pokemon
+            pass  # Fall through to selected Pokemon logic below
+        elif arg.lower() in LATEST_ALIASES:
             # Latest = most recently caught, query desc + limit 1
             result = await session.execute(
                 select(Pokemon)
@@ -124,6 +136,8 @@ async def resolve_pokemon(
                 .limit(1)
             )
             return result.scalar_one_or_none()
+        elif arg.isdigit():
+            return await get_user_pokemon_by_index(session, user.telegram_id, int(arg))
     
     # Fall back to selected Pokemon
     if user.selected_pokemon_id:
@@ -369,11 +383,12 @@ async def cmd_select(message: Message, session: AsyncSession, user: User) -> Non
     text = message.text or ""
     args = text.split()
 
-    if len(args) < 2 or not args[1].isdigit():
-        await message.answer("Usage: /select [number]\nExample: /select 1")
+    if len(args) < 2:
+        await message.answer("Usage: /select [number|l]\nExample: /select 1 or /select l")
         return
 
-    poke = await get_user_pokemon_by_index(session, user.telegram_id, int(args[1]))
+    arg = args[1]
+    poke = await resolve_pokemon(session, user, arg)
 
     if not poke:
         await message.answer("Pokemon not found! Check your list with /pokemon")
@@ -635,43 +650,32 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
         await message.answer("You don't have any Pokemon!")
         return
 
-    # Parse Pokemon index and optional item
-    pokemon_idx = None
+    # Parse Pokemon target and optional item
+    LATEST_ALIASES = {"l", "-l", "--latest", "-latest", "latest"}
+    poke = None
     item_name = None
 
     if len(args) >= 2:
-        # First arg could be index or item name
-        if args[1].isdigit():
-            pokemon_idx = int(args[1])
+        first_arg = args[1]
+        if first_arg.isdigit() or first_arg == "0" or first_arg.lower() in LATEST_ALIASES:
+            # First arg is a Pokemon target
+            poke = await resolve_pokemon(session, user, first_arg)
             if len(args) >= 3:
                 item_name = " ".join(args[2:])
         else:
             # No index specified, use selected pokemon
             item_name = " ".join(args[1:])
 
-    # Get the target pokemon
-    if pokemon_idx:
-        if pokemon_idx < 1 or pokemon_idx > len(pokemon_list):
-            await message.answer(f"Invalid Pokemon ID! You have {len(pokemon_list)} Pokemon.")
-            return
-        poke = pokemon_list[pokemon_idx - 1]
-    elif user.selected_pokemon_id:
-        # Use selected pokemon
-        sel_result = await session.execute(
-            select(Pokemon)
-            .where(Pokemon.id == user.selected_pokemon_id)
-            .where(Pokemon.owner_id == user.telegram_id)
-        )
-        poke = sel_result.scalar_one_or_none()
-        if not poke:
-            await message.answer("Your selected Pokemon was not found. Use /evolve [number]")
-            return
-    else:
+    # Fall back to selected pokemon if no target resolved yet
+    if poke is None:
+        poke = await resolve_pokemon(session, user, None)
+
+    if not poke:
         await message.answer(
             "Please specify a Pokemon to evolve!\n"
-            "Usage: /evolve [number] [item name]\n"
+            "Usage: /evolve [number|l] [item name]\n"
             "Example: /evolve 1\n"
-            "Example: /evolve 1 fire stone"
+            "Example: /evolve l fire stone"
         )
         return
 

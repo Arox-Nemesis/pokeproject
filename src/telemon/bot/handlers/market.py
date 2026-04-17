@@ -630,12 +630,59 @@ async def market_sell(
         )
         return
 
-    # Parse Pokemon ID
-    try:
-        pokemon_idx = int(args[0])
-    except ValueError:
-        await message.answer("❌ Invalid Pokemon ID. Use a number.")
-        return
+    # Parse Pokemon ID (supports l/latest/0 for latest/selected)
+    LATEST_ALIASES = {"l", "-l", "--latest", "-latest", "latest"}
+    pokemon_arg = args[0].lower()
+    pokemon = None
+
+    if pokemon_arg in LATEST_ALIASES:
+        # Get most recently caught Pokemon
+        result = await session.execute(
+            select(Pokemon)
+            .where(Pokemon.owner_id == user.telegram_id)
+            .order_by(Pokemon.caught_at.desc())
+            .limit(1)
+        )
+        pokemon = result.scalar_one_or_none()
+        if not pokemon:
+            await message.answer("❌ You don't have any Pokemon!")
+            return
+    elif pokemon_arg == "0":
+        # Use selected Pokemon
+        if not user.selected_pokemon_id:
+            await message.answer("❌ No Pokemon selected! Use /select first.")
+            return
+        result = await session.execute(
+            select(Pokemon)
+            .where(Pokemon.id == user.selected_pokemon_id)
+            .where(Pokemon.owner_id == user.telegram_id)
+        )
+        pokemon = result.scalar_one_or_none()
+        if not pokemon:
+            await message.answer("❌ Selected Pokemon not found.")
+            return
+    else:
+        try:
+            pokemon_idx = int(args[0])
+        except ValueError:
+            await message.answer("❌ Invalid Pokemon ID. Use a number, `l` for latest, or `0` for selected.")
+            return
+
+        # Get user's Pokemon by index
+        pokemon_list = await get_user_pokemon_list(session, user.telegram_id)
+
+        if not pokemon_list:
+            await message.answer("❌ You don't have any Pokemon!")
+            return
+
+        if pokemon_idx < 1 or pokemon_idx > len(pokemon_list):
+            await message.answer(
+                f"❌ Invalid Pokemon ID! You have {len(pokemon_list)} Pokemon.\n"
+                "Use /pokemon to see your collection."
+            )
+            return
+
+        pokemon = pokemon_list[pokemon_idx - 1]
 
     # Parse price
     try:
@@ -657,22 +704,6 @@ async def market_sell(
     if price > MARKET_MAX_PRICE:
         await message.answer(f"❌ Maximum price is {MARKET_MAX_PRICE:,} {CURRENCY_SHORT}.")
         return
-
-    # Get user's Pokemon
-    pokemon_list = await get_user_pokemon_list(session, user.telegram_id)
-
-    if not pokemon_list:
-        await message.answer("❌ You don't have any Pokemon!")
-        return
-
-    if pokemon_idx < 1 or pokemon_idx > len(pokemon_list):
-        await message.answer(
-            f"❌ Invalid Pokemon ID! You have {len(pokemon_list)} Pokemon.\n"
-            "Use /pokemon to see your collection."
-        )
-        return
-
-    pokemon = pokemon_list[pokemon_idx - 1]
 
     # Check if Pokemon can be listed
     if pokemon.is_on_market:

@@ -150,7 +150,7 @@ class Pokemon(Base):
     @property
     def is_tradeable(self) -> bool:
         """Check if Pokemon can be traded."""
-        return not self.is_on_market and not self.is_in_trade
+        return not self.is_favorite and not self.is_on_market and not self.is_in_trade
 
     @property
     def is_releasable(self) -> bool:
