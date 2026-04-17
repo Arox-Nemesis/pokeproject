@@ -90,14 +90,14 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     import random
     import uuid
 
-    # Generate random IVs (0-31)
+    # Generate IVs (use forced values from admin spawn if present, else random)
     ivs = {
-        "hp": random.randint(0, MAX_IV),
-        "attack": random.randint(0, MAX_IV),
-        "defense": random.randint(0, MAX_IV),
-        "sp_attack": random.randint(0, MAX_IV),
-        "sp_defense": random.randint(0, MAX_IV),
-        "speed": random.randint(0, MAX_IV),
+        "hp": spawn.force_iv_hp if spawn.force_iv_hp is not None else random.randint(0, MAX_IV),
+        "attack": spawn.force_iv_attack if spawn.force_iv_attack is not None else random.randint(0, MAX_IV),
+        "defense": spawn.force_iv_defense if spawn.force_iv_defense is not None else random.randint(0, MAX_IV),
+        "sp_attack": spawn.force_iv_sp_attack if spawn.force_iv_sp_attack is not None else random.randint(0, MAX_IV),
+        "sp_defense": spawn.force_iv_sp_defense if spawn.force_iv_sp_defense is not None else random.randint(0, MAX_IV),
+        "speed": spawn.force_iv_speed if spawn.force_iv_speed is not None else random.randint(0, MAX_IV),
     }
 
     # Determine nature
@@ -110,12 +110,15 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     # Determine gender
     gender = determine_gender(spawn.species)
 
+    # Determine level (use forced level from admin spawn if present)
+    catch_level = spawn.force_level if spawn.force_level is not None else random.randint(CATCH_LEVEL_MIN, CATCH_LEVEL_MAX)
+
     # Create the Pokemon
     new_pokemon = Pokemon(
         id=uuid.uuid4(),
         owner_id=user.telegram_id,
         species_id=spawn.species_id,
-        level=random.randint(CATCH_LEVEL_MIN, CATCH_LEVEL_MAX),  # Random level 1-30
+        level=catch_level,
         iv_hp=ivs["hp"],
         iv_attack=ivs["attack"],
         iv_defense=ivs["defense"],

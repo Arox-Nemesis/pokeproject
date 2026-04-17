@@ -14,6 +14,7 @@ from telemon.database.models.base import Base
 class TradeStatus(str, Enum):
     """Trade status enum."""
 
+    WAITING_ACCEPT = "waiting_accept"  # Waiting for target user to accept
     PENDING = "pending"
     CONFIRMED_ONE = "confirmed_one"  # One party confirmed
     COMPLETED = "completed"
@@ -70,6 +71,7 @@ class Trade(Base):
 
     # Timing
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    last_activity_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # Relationships

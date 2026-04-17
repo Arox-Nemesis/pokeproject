@@ -98,6 +98,70 @@ async def timed_spawn_loop(bot) -> None:
         await asyncio.sleep(60)
 
 
+async def trade_expiry_loop(bot) -> None:
+    """Background task: auto-cancel trades after 5 minutes of inactivity."""
+    from datetime import datetime, timedelta
+    from sqlalchemy import select
+    from telemon.database import async_session_factory
+    from telemon.database.models import Pokemon
+    from telemon.database.models.trade import Trade, TradeStatus
+
+    await asyncio.sleep(30)  # Wait 30 seconds after startup
+
+    while True:
+        try:
+            async with async_session_factory() as session:
+                cutoff = datetime.utcnow() - timedelta(minutes=5)
+                result = await session.execute(
+                    select(Trade).where(
+                        Trade.status.in_([
+                            TradeStatus.WAITING_ACCEPT,
+                            TradeStatus.PENDING,
+                            TradeStatus.CONFIRMED_ONE,
+                        ]),
+                        Trade.last_activity_at < cutoff,
+                    )
+                )
+                expired_trades = result.scalars().all()
+
+                for trade in expired_trades:
+                    # Unmark all Pokemon in the trade
+                    for poke_id in (trade.user1_pokemon_ids or []) + (trade.user2_pokemon_ids or []):
+                        poke_result = await session.execute(
+                            select(Pokemon).where(Pokemon.id == poke_id)
+                        )
+                        poke = poke_result.scalar_one_or_none()
+                        if poke:
+                            poke.is_in_trade = False
+
+                    trade.status = TradeStatus.CANCELLED
+                    await session.commit()
+
+                    logger.info(
+                        "Trade auto-cancelled due to inactivity",
+                        trade_id=str(trade.id),
+                        user1_id=trade.user1_id,
+                        user2_id=trade.user2_id,
+                    )
+
+                    # Notify the chat
+                    if trade.chat_id:
+                        try:
+                            await bot.send_message(
+                                trade.chat_id,
+                                "⏳ <b>Trade Auto-Cancelled</b>\n\n"
+                                "The trade was cancelled due to 5 minutes of inactivity.\n"
+                                "All Pok\u00e9mon have been returned.",
+                            )
+                        except Exception:
+                            pass  # Chat may no longer be accessible
+
+        except Exception as e:
+            logger.error("Error in trade expiry loop", error=str(e))
+
+        await asyncio.sleep(60)
+
+
 async def main() -> None:
     """Main function to run the bot."""
     # Set up logging
@@ -125,8 +189,9 @@ async def main() -> None:
             bot_id=bot_info.id,
         )
 
-        # Start timed spawn background task
+        # Start background tasks
         spawn_task = asyncio.create_task(timed_spawn_loop(bot))
+        trade_expiry_task = asyncio.create_task(trade_expiry_loop(bot))
 
         # Start polling
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
@@ -137,6 +202,7 @@ async def main() -> None:
     finally:
         # Cleanup
         spawn_task.cancel()
+        trade_expiry_task.cancel()
         await bot.session.close()
         await close_db()
         logger.info("Bot stopped")

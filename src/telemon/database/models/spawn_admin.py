@@ -13,6 +13,7 @@ SPAWN_PERMISSIONS = {
     "type",      # /spawn type:fire — filter by type
     "rarity",    # /spawn legendary / mythical / rare / ultra_rare
     "shiny",     # /spawn --shiny  — force shiny
+    "stats",     # /spawn level:50 iv:31 — force level/IVs
     "all",       # shortcut: grants everything
 }
 

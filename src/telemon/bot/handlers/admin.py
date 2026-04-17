@@ -56,17 +56,41 @@ def _check_perm(user_id: int, admin: SpawnAdmin | None, perm: str) -> bool:
 # Spawn argument parser
 # ------------------------------------------------------------------ #
 
+# Mapping of short stat token prefixes to force_stats dict keys
+_STAT_TOKEN_MAP: dict[str, str] = {
+    "hp:": "iv_hp",
+    "atk:": "iv_attack",
+    "def:": "iv_defense",
+    "spa:": "iv_sp_attack",
+    "spd:": "iv_sp_defense",
+    "spe:": "iv_speed",
+}
+
+# All six IV keys in the stats dict (stable order for distribution)
+_IV_KEYS = ("iv_hp", "iv_attack", "iv_defense", "iv_sp_attack", "iv_sp_defense", "iv_speed")
+
+
 def _parse_spawn_args(text: str) -> dict:
     """Parse /spawn arguments into a structured dict.
 
     Returns:
         {
-            "name": str | None,        # Pokemon name
-            "gen": int | None,         # generation filter
-            "type": str | None,        # type filter
-            "rarity": str | None,      # legendary/mythical/rare/ultra_rare/uncommon/common
-            "shiny": bool,             # force shiny
-            "perms_needed": set[str],  # permissions required
+            "name": str | None,
+            "gen": int | None,
+            "type": str | None,
+            "rarity": str | None,
+            "shiny": bool,
+            "stats": {
+                "level": int | None,
+                "iv_percent": int | None,   # target IV% (0-100)
+                "iv_hp": int | None,        # individual forced IVs (0-31)
+                "iv_attack": int | None,
+                "iv_defense": int | None,
+                "iv_sp_attack": int | None,
+                "iv_sp_defense": int | None,
+                "iv_speed": int | None,
+            },
+            "perms_needed": set[str],
         }
     """
     result: dict = {
@@ -75,6 +99,16 @@ def _parse_spawn_args(text: str) -> dict:
         "type": None,
         "rarity": None,
         "shiny": False,
+        "stats": {
+            "level": None,
+            "iv_percent": None,
+            "iv_hp": None,
+            "iv_attack": None,
+            "iv_defense": None,
+            "iv_sp_attack": None,
+            "iv_sp_defense": None,
+            "iv_speed": None,
+        },
         "perms_needed": set(),
     }
 
@@ -121,6 +155,44 @@ def _parse_spawn_args(text: str) -> dict:
                 result["perms_needed"].add("type")
             continue
 
+        # level:N — force catch level (perm: stats)
+        if lower.startswith("level:"):
+            try:
+                lvl = int(lower.split(":", 1)[1])
+                if 1 <= lvl <= 100:
+                    result["stats"]["level"] = lvl
+                    result["perms_needed"].add("stats")
+            except ValueError:
+                pass
+            continue
+
+        # iv:N — target N% IV total (perm: stats)
+        if lower.startswith("iv:"):
+            try:
+                pct = int(lower.split(":", 1)[1])
+                if 0 <= pct <= 100:
+                    result["stats"]["iv_percent"] = pct
+                    result["perms_needed"].add("stats")
+            except ValueError:
+                pass
+            continue
+
+        # Individual stat tokens: hp:N, atk:N, def:N, etc. (perm: stats)
+        stat_matched = False
+        for prefix, stat_key in _STAT_TOKEN_MAP.items():
+            if lower.startswith(prefix):
+                try:
+                    val = int(lower.split(":", 1)[1])
+                    if 0 <= val <= 31:
+                        result["stats"][stat_key] = val
+                        result["perms_needed"].add("stats")
+                except ValueError:
+                    pass
+                stat_matched = True
+                break
+        if stat_matched:
+            continue
+
         # Rarity keywords
         if lower in RARITY_KEYWORDS:
             result["rarity"] = lower
@@ -135,6 +207,123 @@ def _parse_spawn_args(text: str) -> dict:
         result["perms_needed"].add("name")
 
     return result
+
+
+def _distribute_iv_total(total: int, n: int) -> list[int]:
+    """Distribute *total* IV points across *n* stats (each 0-31).
+
+    Returns a list of *n* ints summing to *total*, each in [0, 31].
+    The values are shuffled for randomness.
+    """
+    stats: list[int] = []
+    remaining = total
+    for i in range(n - 1):
+        slots_left = n - i
+        lo = max(0, remaining - (slots_left - 1) * 31)
+        hi = min(31, remaining)
+        val = random.randint(lo, hi)
+        stats.append(val)
+        remaining -= val
+    stats.append(remaining)  # last slot gets the remainder
+    random.shuffle(stats)
+    return stats
+
+
+def _resolve_forced_stats(raw_stats: dict) -> tuple[dict | None, str | None]:
+    """Resolve parsed stats into final force_stats dict for create_spawn.
+
+    Handles five scenarios:
+      1. Only iv:N%        → distribute across all 6
+      2. Only individual    → use them, rest random
+      3. iv:N% + some       → distribute remainder across unfixed
+      4. iv:N% + all 6      → validate sum matches target
+      5. All 6 no iv:       → use all, IV% is whatever it sums to
+
+    Returns (force_stats, error_message).
+      - force_stats is None when no stats were requested.
+      - error_message is None on success.
+    """
+    iv_percent: int | None = raw_stats.get("iv_percent")
+    level: int | None = raw_stats.get("level")
+
+    # Gather individual IV overrides
+    fixed: dict[str, int] = {}  # key -> value for specified IVs
+    unfixed: list[str] = []     # keys for unspecified IVs
+    for key in _IV_KEYS:
+        val = raw_stats.get(key)
+        if val is not None:
+            fixed[key] = val
+        else:
+            unfixed.append(key)
+
+    has_iv_target = iv_percent is not None
+    has_individual = len(fixed) > 0
+    has_level = level is not None
+
+    # Nothing requested
+    if not has_iv_target and not has_individual and not has_level:
+        return None, None
+
+    result: dict = {}
+    if has_level:
+        result["level"] = level
+
+    # --- Scenario 2 / 5: no iv target, just individual stats ---
+    if not has_iv_target:
+        # Use specified values; unspecified stay None (random at catch)
+        for key, val in fixed.items():
+            result[key] = val
+        return result, None
+
+    # --- We have an iv:N% target ---
+    max_total = 6 * 31  # 186
+    target_total = round(iv_percent / 100 * max_total)
+    target_total = max(0, min(max_total, target_total))  # clamp
+
+    fixed_sum = sum(fixed.values())
+
+    # Scenario 4: all 6 specified + iv target
+    if len(fixed) == 6:
+        if fixed_sum != target_total:
+            actual_pct = round(fixed_sum / max_total * 100, 1)
+            return None, (
+                f"Your stats total <b>{actual_pct}%</b> IV "
+                f"but you specified <b>iv:{iv_percent}</b>.\n"
+                f"Remove one stat to allow auto-adjustment, "
+                f"or change the iv: value."
+            )
+        # Sum matches — use all as-is
+        for key, val in fixed.items():
+            result[key] = val
+        return result, None
+
+    # Scenario 1 or 3: distribute remaining budget across unfixed stats
+    remaining_budget = target_total - fixed_sum
+    n_unfixed = len(unfixed)
+
+    if remaining_budget < 0:
+        return None, (
+            f"The stats you specified already total <b>{fixed_sum}</b> points, "
+            f"which exceeds the iv:{iv_percent} target of <b>{target_total}</b>.\n"
+            f"Lower some stat values or increase iv:N."
+        )
+    if remaining_budget > n_unfixed * 31:
+        min_needed = round((fixed_sum + n_unfixed * 31) / max_total * 100)
+        return None, (
+            f"Can't reach iv:{iv_percent} — the {n_unfixed} remaining stats "
+            f"can contribute at most <b>{n_unfixed * 31}</b> points, "
+            f"but <b>{remaining_budget}</b> are needed.\n"
+            f"Increase some stat values or lower iv: to at most <b>{min_needed}</b>."
+        )
+
+    # Distribute remaining budget
+    distributed = _distribute_iv_total(remaining_budget, n_unfixed)
+    for key, val in fixed.items():
+        result[key] = val
+    for key, val in zip(unfixed, distributed):
+        result[key] = val
+
+    return result, None
 
 
 # ------------------------------------------------------------------ #
@@ -317,6 +506,12 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
         await message.answer("No Pokemon species found in database!")
         return
 
+    # Resolve stats (distribution + conflict detection)
+    force_stats, stats_error = _resolve_forced_stats(args["stats"])
+    if stats_error:
+        await message.answer(f"⚠️ {stats_error}")
+        return
+
     # Create spawn
     spawn = await create_spawn(
         session=session,
@@ -324,6 +519,7 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
         message_id=0,
         species=species,
         force_shiny=args["shiny"],
+        force_stats=force_stats,
     )
 
     if not spawn:
@@ -349,6 +545,8 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
                 details.append(args["rarity"])
             if args["shiny"]:
                 details.append("shiny")
+            if force_stats:
+                details.append(f"stats:{force_stats}")
 
             logger.info(
                 "Admin force spawned Pokemon",

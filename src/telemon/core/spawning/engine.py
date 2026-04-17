@@ -96,6 +96,7 @@ async def create_spawn(
     message_id: int,
     species: PokemonSpecies | None = None,
     force_shiny: bool = False,
+    force_stats: dict | None = None,
 ) -> ActiveSpawn | None:
     """Create a new Pokemon spawn in a chat."""
     # Get random species if not provided
@@ -119,6 +120,16 @@ async def create_spawn(
         is_shiny=is_shiny,
         expires_at=expires_at,
     )
+
+    # Apply forced stats if provided
+    if force_stats:
+        spawn.force_level = force_stats.get("level")
+        spawn.force_iv_hp = force_stats.get("iv_hp")
+        spawn.force_iv_attack = force_stats.get("iv_attack")
+        spawn.force_iv_defense = force_stats.get("iv_defense")
+        spawn.force_iv_sp_attack = force_stats.get("iv_sp_attack")
+        spawn.force_iv_sp_defense = force_stats.get("iv_sp_defense")
+        spawn.force_iv_speed = force_stats.get("iv_speed")
 
     session.add(spawn)
 

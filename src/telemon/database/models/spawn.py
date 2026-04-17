@@ -58,6 +58,15 @@ class ActiveSpawn(Base):
     # Hint state (how many letters revealed)
     hints_used: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Admin-forced stats (nullable — None means random at catch time)
+    force_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    force_iv_hp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    force_iv_attack: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    force_iv_defense: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    force_iv_sp_attack: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    force_iv_sp_defense: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    force_iv_speed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Relationships
     species = relationship("PokemonSpecies", lazy="joined")
     group = relationship("Group", lazy="joined")
