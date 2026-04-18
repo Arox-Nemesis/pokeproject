@@ -49,10 +49,15 @@ _throttle_lock: asyncio.Lock | None = None
 DATA_DIR = Path(__file__).parent.parent.parent.parent / "data"
 CSV_DIR = DATA_DIR / "csv"
 
-# Output map files
-POKEMON_MAP_FILE = DATA_DIR / "emoji_map.json"
-ITEM_MAP_FILE = DATA_DIR / "item_emoji_map.json"
-TYPE_MAP_FILE = DATA_DIR / "type_emoji_map.json"
+# Per-bot output map files
+def pokemon_map_path(bot_id: int) -> Path:
+    return DATA_DIR / f"emoji_map_{bot_id}.json"
+
+def item_map_path(bot_id: int) -> Path:
+    return DATA_DIR / f"item_emoji_map_{bot_id}.json"
+
+def type_map_path(bot_id: int) -> Path:
+    return DATA_DIR / f"type_emoji_map_{bot_id}.json"
 
 # Sprite directories
 POKEMON_SPRITE_DIR = DATA_DIR / "sprites" / "pokemon"
@@ -251,18 +256,9 @@ def get_all_bot_tokens() -> list[str]:
 
 
 async def _init_all_bots() -> list[dict]:
-    """Fetch username for the PREMIUM bot token via getMe API."""
+    """Fetch username for each unique bot token via getMe API."""
     global _bots
-    
-    # Check if we should only use premium bot to avoid duplication
-    env_path = DATA_DIR.parent / ".env"
-    premium_token = None
-    for line in env_path.read_text().splitlines():
-        if line.startswith("PREMIUM_BOT_TOKEN="):
-            premium_token = line.split("=", 1)[1].strip().strip('"').strip("'")
-            break
-            
-    tokens = [premium_token] if premium_token else get_all_bot_tokens()[:1]
+    tokens = get_all_bot_tokens()
     
     _bots = []
     async with aiohttp.ClientSession() as http:
@@ -441,7 +437,7 @@ def pokemon_set_title(batch: int, start: int, end: int) -> str:
 
 
 async def upload_pokemon(dry_run: bool = False) -> None:
-    """Upload all Pokemon sprites and build emoji_map.json."""
+    """Upload all Pokemon sprites and build per-bot emoji_map_{bot_id}.json."""
     print("\n" + "=" * 60)
     print("  POKEMON EMOJI UPLOAD")
     print("=" * 60)
@@ -450,25 +446,11 @@ async def upload_pokemon(dry_run: bool = False) -> None:
     total = len(forms)
     print(f"  Species from pokemon.csv: {total}")
 
-    # Load existing map for resume
-    emoji_map: dict[str, str] = {}
-    if POKEMON_MAP_FILE.exists():
-        emoji_map = json.loads(POKEMON_MAP_FILE.read_text())
-    already = {int(k) for k in emoji_map}
-    remaining = sorted(d for d in forms if d not in already)
-
-    print(f"  Already mapped: {len(already)}")
-    print(f"  Remaining: {len(remaining)}")
-
-    if not remaining:
-        print("\n✅ All Pokemon already mapped!")
-        return
-
     if dry_run:
         print("\n📥 DRY RUN: Loading sprites (no upload)...")
         loaded = 0
         async with aiohttp.ClientSession() as http:
-            for dex in remaining[:20]:  # Sample 20
+            for dex in sorted(forms.keys())[:20]:
                 info = forms[dex]
                 data = await load_pokemon_sprite(http, info["id"])
                 if data:
@@ -479,49 +461,66 @@ async def upload_pokemon(dry_run: bool = False) -> None:
         print(f"\n  Loaded {loaded}/20 sample sprites")
         return
 
-    # Phase 1: Download sprites
-    print(f"\n📥 PHASE 1: Loading {len(remaining)} sprites...\n")
+    # Phase 1: Download ALL sprites once (shared across bots)
+    all_dex = sorted(forms.keys())
+    print(f"\n📥 PHASE 1: Loading {len(all_dex)} sprites...\n")
     sprites: dict[int, bytes] = {}
     dl_start = time.time()
 
     async with aiohttp.ClientSession() as http:
-        for i, dex in enumerate(remaining):
+        for i, dex in enumerate(all_dex):
             info = forms[dex]
             data = await load_pokemon_sprite(http, info["id"])
             if data:
                 sprites[dex] = data
             done = i + 1
-            if done % 50 == 0 or done == len(remaining):
+            if done % 50 == 0 or done == len(all_dex):
                 print(
-                    f"  {progress_bar(done, len(remaining))}  "
+                    f"  {progress_bar(done, len(all_dex))}  "
                     f"elapsed {elapsed_str(dl_start)}  "
-                    f"ETA {eta_str(dl_start, done, len(remaining))}"
+                    f"ETA {eta_str(dl_start, done, len(all_dex))}"
                 )
 
-    failed_dl = len(remaining) - len(sprites)
+    failed_dl = len(all_dex) - len(sprites)
     print(f"\n  ✅ Loaded: {len(sprites)}  |  ❌ Failed: {failed_dl}")
 
     if not sprites:
         print("\nNo sprites to upload. Exiting.")
         return
 
-    # Phase 2: Upload to Telegram — concurrent batch uploads
+    # Phase 2: Upload to each bot with per-bot maps
     def batch_for(dex: int) -> int:
         return (dex - 1) // MAX_PER_SET + 1
 
-    batches: dict[int, list[int]] = {}
-    for dex in sorted(sprites.keys()):
-        b = batch_for(dex)
-        batches.setdefault(b, []).append(dex)
-
     for bot in _bots:
         bot_token = bot["token"]
+        bot_id = bot["bot_id"]
         username = bot["username"]
-        print(f"\n📤 Uploading {len(sprites)} Pokemon emoji for @{username}...")
-        print(f"  {len(batches)} batches running concurrently\n")
+        map_file = pokemon_map_path(bot_id)
 
+        # Load this bot's existing map
+        emoji_map: dict[str, str] = {}
+        if map_file.exists():
+            emoji_map = json.loads(map_file.read_text())
+        already = {int(k) for k in emoji_map}
+        remaining_dex = sorted(d for d in sprites if d not in already)
+
+        print(f"\n📤 @{username} (ID {bot_id})")
+        print(f"  Already mapped: {len(already)}")
+        print(f"  Remaining: {len(remaining_dex)}")
+
+        if not remaining_dex:
+            print("  ✅ All Pokemon already mapped for this bot!")
+            continue
+
+        batches: dict[int, list[int]] = {}
+        for dex in remaining_dex:
+            b = batch_for(dex)
+            batches.setdefault(b, []).append(dex)
+
+        print(f"  {len(batches)} batches running concurrently\n")
         upload_start = time.time()
-        _progress = {"done": 0, "fail": 0, "total": len(sprites)}
+        _progress = {"done": 0, "fail": 0, "total": len(remaining_dex)}
 
         async def _upload_batch(batch_num: int, dex_list: list[int]) -> None:
             """Upload one batch of stickers sequentially, map at end."""
@@ -531,14 +530,12 @@ async def upload_pokemon(dry_run: bool = False) -> None:
             title = pokemon_set_title(batch_num, batch_start_dex, batch_end_dex)
 
             async with aiohttp.ClientSession() as http:
-                # Check if set exists
                 set_data = await get_sticker_set(http, bot_token, sname)
                 set_exists = set_data is not None
                 existing_count = len(set_data.get("stickers", [])) if set_data else 0
-                expected_count = batch_end_dex - batch_start_dex + 1
 
                 if set_exists and existing_count >= len(dex_list):
-                    # Set is already full — just remap by position
+                    # Full — remap by position
                     stickers = set_data.get("stickers", [])
                     mapped = 0
                     for idx, s in enumerate(stickers):
@@ -549,10 +546,9 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                             mapped += 1
                     _progress["done"] += mapped
                     print(
-                        f"  Set {batch_num}: already full ({existing_count} stickers) "
-                        f"→ remapped {mapped}"
+                        f"  Set {batch_num}: full ({existing_count}) → remapped {mapped}"
                     )
-                    POKEMON_MAP_FILE.write_text(json.dumps(emoji_map, indent=2))
+                    map_file.write_text(json.dumps(emoji_map, indent=2))
                     return
 
                 if set_exists:
@@ -561,7 +557,6 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                 uploaded_dex = []
                 for dex in dex_list:
                     png = sprites[dex]
-
                     if not set_exists:
                         ok = await create_emoji_set(
                             http, bot_token, sname, title, png
@@ -580,7 +575,6 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                         else:
                             _progress["fail"] += 1
 
-                    # Progress every 25
                     if _progress["done"] % 25 == 0:
                         print(
                             f"  {progress_bar(_progress['done'], _progress['total'])}  "
@@ -588,7 +582,7 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                             f"ETA {eta_str(upload_start, _progress['done'], _progress['total'])}"
                         )
 
-                # Map positions: read set once, map all by position
+                # Map positions at end
                 set_data = await get_sticker_set(http, bot_token, sname)
                 if set_data:
                     stickers = set_data.get("stickers", [])
@@ -598,24 +592,21 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                         if eid:
                             emoji_map[str(d)] = eid
 
-                POKEMON_MAP_FILE.write_text(json.dumps(emoji_map, indent=2))
+                map_file.write_text(json.dumps(emoji_map, indent=2))
                 print(
                     f"  Set {batch_num} done: {len(uploaded_dex)} uploaded, "
                     f"{len(emoji_map)} total mapped"
                 )
 
-        # Run all batches concurrently
         await asyncio.gather(
             *[_upload_batch(bn, dl) for bn, dl in sorted(batches.items())]
         )
 
-        POKEMON_MAP_FILE.write_text(json.dumps(emoji_map, indent=2))
+        map_file.write_text(json.dumps(emoji_map, indent=2))
         print(
-            f"\n  ✅ @{username}: {_progress['done']} uploaded, "
-            f"{_progress['fail']} failed"
+            f"\n  ✅ @{username}: {_progress['done']} done, "
+            f"{_progress['fail']} failed  →  {map_file.name}"
         )
-
-    print(f"  📎 Total mapped: {len(emoji_map)}")
 
 
 # ──────────────────────────────────────────────
@@ -626,7 +617,7 @@ def item_set_name(batch: int, username: str) -> str:
 
 
 async def upload_items(dry_run: bool = False) -> None:
-    """Upload item sprites used by the bot."""
+    """Upload item sprites — per-bot item_emoji_map_{bot_id}.json."""
     print("\n" + "=" * 60)
     print("  ITEM EMOJI UPLOAD")
     print("=" * 60)
@@ -634,66 +625,66 @@ async def upload_items(dry_run: bool = False) -> None:
     items = get_bot_items()
     print(f"  Bot items with sprites: {len(items)}")
 
-    # Load existing map
-    item_map: dict[str, str] = {}
-    if ITEM_MAP_FILE.exists():
-        item_map = json.loads(ITEM_MAP_FILE.read_text())
-    already = set(item_map.keys())
-    remaining = [it for it in items if it["slug"] not in already]
-
-    print(f"  Already mapped: {len(already)}")
-    print(f"  Remaining: {len(remaining)}")
-
-    if not remaining:
-        print("\n✅ All items already mapped!")
-        return
-
     if dry_run:
         print("\n📥 DRY RUN: Testing sprite loading...")
-        for it in remaining[:10]:
+        for it in items[:10]:
             data = load_local_sprite(ITEM_SPRITE_DIR / f"{it['slug']}.png")
             status = f"✅ ({len(data)} bytes)" if data else "❌ missing"
             print(f"  {it['slug']}: {status}")
         return
 
-    # Load all item sprites
-    sprites: dict[str, bytes] = {}
-    for it in remaining:
+    # Load all item sprites once
+    all_sprites: dict[str, bytes] = {}
+    for it in items:
         data = load_local_sprite(ITEM_SPRITE_DIR / f"{it['slug']}.png")
         if data:
-            sprites[it["slug"]] = data
+            all_sprites[it["slug"]] = data
+    print(f"  Loaded {len(all_sprites)}/{len(items)} sprites")
 
-    print(f"  Loaded {len(sprites)}/{len(remaining)} sprites")
-
-    if not sprites:
+    if not all_sprites:
         print("No item sprites available.")
         return
 
-    # Upload to all bots
     for bot in _bots:
         bot_token = bot["token"]
+        bot_id = bot["bot_id"]
         username = bot["username"]
-        print(f"\n📤 Uploading {len(sprites)} item emoji for @{username}...\n")
+        map_file = item_map_path(bot_id)
+
+        item_map: dict[str, str] = {}
+        if map_file.exists():
+            item_map = json.loads(map_file.read_text())
+        already = set(item_map.keys())
+        sprites = {k: v for k, v in all_sprites.items() if k not in already}
+
+        print(f"\n📤 @{username} (ID {bot_id})")
+        print(f"  Already mapped: {len(already)}")
+        print(f"  Remaining: {len(sprites)}")
+
+        if not sprites:
+            print("  ✅ All items already mapped for this bot!")
+            continue
+
         upload_start = time.time()
         sname = item_set_name(1, username)
-        set_exists = False
         uploaded_slugs = []
+        sorted_slugs = sorted(sprites.keys())
 
         async with aiohttp.ClientSession() as http:
             set_data = await get_sticker_set(http, bot_token, sname)
             set_exists = set_data is not None
             existing_count = len(set_data.get("stickers", [])) if set_data else 0
-            sorted_slugs = sorted(sprites.keys())
 
-            if set_exists and existing_count >= len(sorted_slugs):
-                # Already full — just remap
+            if set_exists and existing_count >= len(all_sprites):
+                # Full — remap
                 stickers = set_data.get("stickers", [])
+                all_sorted = sorted(all_sprites.keys())
                 for idx, s in enumerate(stickers):
-                    if idx < len(sorted_slugs):
+                    if idx < len(all_sorted):
                         eid = s.get("custom_emoji_id", "")
                         if eid:
-                            item_map[sorted_slugs[idx]] = eid
-                print(f"  Set already full ({existing_count} stickers) → remapped {len(item_map)}")
+                            item_map[all_sorted[idx]] = eid
+                print(f"  Set full ({existing_count}) → remapped {len(item_map)}")
             else:
                 if set_exists:
                     print(f"  Set exists with {existing_count} stickers")
@@ -721,21 +712,22 @@ async def upload_items(dry_run: bool = False) -> None:
                 set_data = await get_sticker_set(http, bot_token, sname)
                 if set_data:
                     stickers = set_data.get("stickers", [])
+                    all_sorted = sorted(all_sprites.keys())
                     for idx, s in enumerate(stickers):
-                        if idx < len(sorted_slugs):
+                        if idx < len(all_sorted):
                             eid = s.get("custom_emoji_id", "")
                             if eid:
-                                item_map[sorted_slugs[idx]] = eid
+                                item_map[all_sorted[idx]] = eid
 
-    ITEM_MAP_FILE.write_text(json.dumps(item_map, indent=2))
-    print(f"\n  💾 Saved item_emoji_map.json ({len(item_map)} items)")
+        map_file.write_text(json.dumps(item_map, indent=2))
+        print(f"  💾 Saved {map_file.name} ({len(item_map)} items)")
 
 
 # ──────────────────────────────────────────────
 # Upload: Type sprites
 # ──────────────────────────────────────────────
 async def upload_types(dry_run: bool = False) -> None:
-    """Upload type icon sprites (18 types)."""
+    """Upload type icon sprites — per-bot type_emoji_map_{bot_id}.json."""
     print("\n" + "=" * 60)
     print("  TYPE EMOJI UPLOAD")
     print("=" * 60)
@@ -744,68 +736,67 @@ async def upload_types(dry_run: bool = False) -> None:
     main_types = {tid: name for tid, name in types.items() if 1 <= tid <= 18}
     print(f"  Types: {len(main_types)}")
 
-    # Load existing map
-    type_map: dict[str, str] = {}
-    if TYPE_MAP_FILE.exists():
-        type_map = json.loads(TYPE_MAP_FILE.read_text())
-    already = set(type_map.keys())
-    remaining = {tid: name for tid, name in main_types.items() if name not in already}
-
-    print(f"  Already mapped: {len(already)}")
-    print(f"  Remaining: {len(remaining)}")
-
-    if not remaining:
-        print("\n✅ All types already mapped!")
-        return
-
     if dry_run:
         print("\n📥 DRY RUN: Testing type sprite loading...")
-        for tid, name in sorted(remaining.items()):
+        for tid, name in sorted(main_types.items()):
             data = load_local_sprite(TYPE_SPRITE_DIR / f"{tid}.png")
             status = f"✅ ({len(data)} bytes)" if data else "❌ missing"
             print(f"  {name} (ID {tid}): {status}")
         return
 
-    # Load type sprites
-    sprites: dict[str, bytes] = {}
-    for tid, name in sorted(remaining.items()):
+    # Load all type sprites once
+    all_sprites: dict[str, bytes] = {}
+    for tid, name in sorted(main_types.items()):
         data = load_local_sprite(TYPE_SPRITE_DIR / f"{tid}.png")
         if data:
-            sprites[name] = data
+            all_sprites[name] = data
         else:
             print(f"  ⚠️  No sprite for type: {name} (ID {tid})")
+    print(f"  Loaded {len(all_sprites)}/{len(main_types)} type sprites")
 
-    print(f"  Loaded {len(sprites)}/{len(remaining)} type sprites")
-
-    if not sprites:
+    if not all_sprites:
         print("No type sprites available.")
         return
 
-    # Upload to all bots
     for bot in _bots:
         bot_token = bot["token"]
+        bot_id = bot["bot_id"]
         username = bot["username"]
-        print(f"\n📤 Uploading {len(sprites)} type emoji for @{username}...\n")
+        map_file = type_map_path(bot_id)
+
+        type_map: dict[str, str] = {}
+        if map_file.exists():
+            type_map = json.loads(map_file.read_text())
+        already = set(type_map.keys())
+        sprites = {k: v for k, v in all_sprites.items() if k not in already}
+
+        print(f"\n📤 @{username} (ID {bot_id})")
+        print(f"  Already mapped: {len(already)}")
+        print(f"  Remaining: {len(sprites)}")
+
+        if not sprites:
+            print("  ✅ All types already mapped for this bot!")
+            continue
 
         sname = f"telemon_types_by_{username}"
-        set_exists = False
         uploaded_names = []
+        sorted_names = sorted(sprites.keys())
 
         async with aiohttp.ClientSession() as http:
             set_data = await get_sticker_set(http, bot_token, sname)
             set_exists = set_data is not None
             existing_count = len(set_data.get("stickers", [])) if set_data else 0
-            sorted_names = sorted(sprites.keys())
 
-            if set_exists and existing_count >= len(sorted_names):
-                # Already full — just remap
+            if set_exists and existing_count >= len(all_sprites):
+                # Full — remap
                 stickers = set_data.get("stickers", [])
+                all_sorted = sorted(all_sprites.keys())
                 for idx, s in enumerate(stickers):
-                    if idx < len(sorted_names):
+                    if idx < len(all_sorted):
                         eid = s.get("custom_emoji_id", "")
                         if eid:
-                            type_map[sorted_names[idx]] = eid
-                print(f"  Set already full ({existing_count} stickers) → remapped {len(type_map)}")
+                            type_map[all_sorted[idx]] = eid
+                print(f"  Set full ({existing_count}) → remapped {len(type_map)}")
             else:
                 if set_exists:
                     print(f"  Set exists with {existing_count} stickers")
@@ -827,21 +818,22 @@ async def upload_types(dry_run: bool = False) -> None:
                 set_data = await get_sticker_set(http, bot_token, sname)
                 if set_data:
                     stickers = set_data.get("stickers", [])
+                    all_sorted = sorted(all_sprites.keys())
                     for idx, s in enumerate(stickers):
-                        if idx < len(sorted_names):
+                        if idx < len(all_sorted):
                             eid = s.get("custom_emoji_id", "")
                             if eid:
-                                type_map[sorted_names[idx]] = eid
+                                type_map[all_sorted[idx]] = eid
 
-    TYPE_MAP_FILE.write_text(json.dumps(type_map, indent=2))
-    print(f"  💾 Saved type_emoji_map.json ({len(type_map)} types)")
+        map_file.write_text(json.dumps(type_map, indent=2))
+        print(f"  💾 Saved {map_file.name} ({len(type_map)} types)")
 
 
 # ──────────────────────────────────────────────
 # Remap: Re-read existing sticker sets and rebuild maps
 # ──────────────────────────────────────────────
 async def remap_pokemon() -> None:
-    """Re-read all Pokemon sticker sets and rebuild emoji_map.json.
+    """Re-read all Pokemon sticker sets and rebuild per-bot emoji_map_{bot_id}.json.
 
     Searches for sets under ALL known bot usernames (current bots + legacy)
     and ALL known version prefixes (v2, v3).
@@ -850,105 +842,125 @@ async def remap_pokemon() -> None:
     print("  REMAP POKEMON EMOJI")
     print("=" * 60)
 
-    # Use first bot token for API calls (any bot can read any public set)
-    bot_token = _bots[0]["token"]
     all_usernames = _all_known_usernames()
     print(f"  Searching usernames: {', '.join(all_usernames)}")
-
-    emoji_map: dict[str, str] = {}
     total_sets = (1025 + MAX_PER_SET - 1) // MAX_PER_SET
 
-    async with aiohttp.ClientSession() as http:
-        for batch in range(1, total_sets + 1):
-            batch_start = (batch - 1) * MAX_PER_SET + 1
-            batch_end = min(batch * MAX_PER_SET, 1025)
-            found = False
+    for bot in _bots:
+        bot_token = bot["token"]
+        bot_id = bot["bot_id"]
+        username = bot["username"]
+        map_file = pokemon_map_path(bot_id)
+        emoji_map: dict[str, str] = {}
 
-            for username in all_usernames:
-                for version in ("v3", "v2"):
-                    sname = f"telemon_emoji_{version}_{batch}_by_{username}"
-                    set_data = await get_sticker_set(http, bot_token, sname)
-                    if set_data:
-                        stickers = set_data.get("stickers", [])
-                        mapped = 0
-                        for idx, s in enumerate(stickers):
-                            dex = batch_start + idx
-                            if dex <= batch_end:
-                                eid = s.get("custom_emoji_id", "")
-                                if eid:
-                                    emoji_map[str(dex)] = eid
-                                    mapped += 1
-                        print(
-                            f"  Set {batch} (@{username}/{version}): "
-                            f"{len(stickers)} stickers → {mapped} mapped"
-                        )
-                        found = True
+        # Search this bot's username + legacy usernames
+        search_names = [username] + [u for u in _LEGACY_USERNAMES if u != username]
+
+        async with aiohttp.ClientSession() as http:
+            for batch in range(1, total_sets + 1):
+                batch_start = (batch - 1) * MAX_PER_SET + 1
+                batch_end = min(batch * MAX_PER_SET, 1025)
+                found = False
+
+                for uname in search_names:
+                    for version in ("v3", "v2"):
+                        sname = f"telemon_emoji_{version}_{batch}_by_{uname}"
+                        set_data = await get_sticker_set(http, bot_token, sname)
+                        if set_data:
+                            stickers = set_data.get("stickers", [])
+                            mapped = 0
+                            for idx, s in enumerate(stickers):
+                                dex = batch_start + idx
+                                if dex <= batch_end:
+                                    eid = s.get("custom_emoji_id", "")
+                                    if eid:
+                                        emoji_map[str(dex)] = eid
+                                        mapped += 1
+                            print(
+                                f"  Set {batch} (@{uname}/{version}): "
+                                f"{len(stickers)} stickers → {mapped} mapped"
+                            )
+                            found = True
+                            break
+                    if found:
                         break
-                if found:
-                    break
 
-            if not found:
-                print(f"  Set {batch}: NOT FOUND (dex {batch_start}-{batch_end})")
+                if not found:
+                    print(f"  Set {batch}: NOT FOUND (dex {batch_start}-{batch_end})")
 
-    POKEMON_MAP_FILE.write_text(json.dumps(emoji_map, indent=2))
-    print(f"\n  💾 Saved emoji_map.json ({len(emoji_map)} total)")
+        map_file.write_text(json.dumps(emoji_map, indent=2))
+        print(f"\n  💾 @{username}: {map_file.name} ({len(emoji_map)} total)")
 
 
 async def remap_items() -> None:
-    """Re-read item sticker set and rebuild item_emoji_map.json."""
+    """Re-read item sticker set and rebuild per-bot item_emoji_map_{bot_id}.json."""
     print("\n  Re-mapping items...")
-    bot_token = _bots[0]["token"]
     items = get_bot_items()
-    item_map: dict[str, str] = {}
 
-    async with aiohttp.ClientSession() as http:
-        for username in _all_known_usernames():
-            sname = item_set_name(1, username)
-            set_data = await get_sticker_set(http, bot_token, sname)
-            if set_data:
-                stickers = set_data.get("stickers", [])
-                sorted_items = sorted(items, key=lambda x: x["slug"])
-                for idx, s in enumerate(stickers):
-                    if idx < len(sorted_items):
-                        eid = s.get("custom_emoji_id", "")
-                        if eid:
-                            item_map[sorted_items[idx]["slug"]] = eid
-                print(f"  @{username}: Mapped {len(item_map)} item emoji")
-                break
-        else:
-            print("  Item set not found under any bot!")
+    for bot in _bots:
+        bot_token = bot["token"]
+        bot_id = bot["bot_id"]
+        username = bot["username"]
+        map_file = item_map_path(bot_id)
+        item_map: dict[str, str] = {}
 
-    ITEM_MAP_FILE.write_text(json.dumps(item_map, indent=2))
+        search_names = [username] + [u for u in _LEGACY_USERNAMES if u != username]
+
+        async with aiohttp.ClientSession() as http:
+            for uname in search_names:
+                sname = item_set_name(1, uname)
+                set_data = await get_sticker_set(http, bot_token, sname)
+                if set_data:
+                    stickers = set_data.get("stickers", [])
+                    sorted_items = sorted(items, key=lambda x: x["slug"])
+                    for idx, s in enumerate(stickers):
+                        if idx < len(sorted_items):
+                            eid = s.get("custom_emoji_id", "")
+                            if eid:
+                                item_map[sorted_items[idx]["slug"]] = eid
+                    print(f"  @{username}: Mapped {len(item_map)} item emoji (from @{uname})")
+                    break
+            else:
+                print(f"  @{username}: Item set not found!")
+
+        map_file.write_text(json.dumps(item_map, indent=2))
 
 
 async def remap_types() -> None:
-    """Re-read type sticker set and rebuild type_emoji_map.json."""
+    """Re-read type sticker set and rebuild per-bot type_emoji_map_{bot_id}.json."""
     print("\n  Re-mapping types...")
-    bot_token = _bots[0]["token"]
     types = load_types_csv()
     main_types = sorted(
         [(tid, name) for tid, name in types.items() if 1 <= tid <= 18],
-        key=lambda x: x[1],  # sorted by name (same as upload order)
+        key=lambda x: x[1],
     )
-    type_map: dict[str, str] = {}
 
-    async with aiohttp.ClientSession() as http:
-        for username in _all_known_usernames():
-            sname = f"telemon_types_by_{username}"
-            set_data = await get_sticker_set(http, bot_token, sname)
-            if set_data:
-                stickers = set_data.get("stickers", [])
-                for idx, s in enumerate(stickers):
-                    if idx < len(main_types):
-                        eid = s.get("custom_emoji_id", "")
-                        if eid:
-                            type_map[main_types[idx][1]] = eid
-                print(f"  @{username}: Mapped {len(type_map)} type emoji")
-                break
-        else:
-            print("  Type set not found under any bot!")
+    for bot in _bots:
+        bot_token = bot["token"]
+        bot_id = bot["bot_id"]
+        username = bot["username"]
+        map_file = type_map_path(bot_id)
+        type_map: dict[str, str] = {}
 
-    TYPE_MAP_FILE.write_text(json.dumps(type_map, indent=2))
+        search_names = [username] + [u for u in _LEGACY_USERNAMES if u != username]
+
+        async with aiohttp.ClientSession() as http:
+            for uname in search_names:
+                sname = f"telemon_types_by_{uname}"
+                set_data = await get_sticker_set(http, bot_token, sname)
+                if set_data:
+                    stickers = set_data.get("stickers", [])
+                    for idx, s in enumerate(stickers):
+                        if idx < len(main_types):
+                            eid = s.get("custom_emoji_id", "")
+                            if eid:
+                                type_map[main_types[idx][1]] = eid
+                    print(f"  @{username}: Mapped {len(type_map)} type emoji (from @{uname})")
+                    break
+            else:
+                print(f"  @{username}: Type set not found!")
+
+        map_file.write_text(json.dumps(type_map, indent=2))
 
 
 # ──────────────────────────────────────────────

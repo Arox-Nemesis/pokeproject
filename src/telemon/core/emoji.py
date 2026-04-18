@@ -6,10 +6,10 @@ Supports two modes based on the bot ID detected at startup:
   - Plain mode   (bot ID 7939028029 or any other): Returns the fallback string
     (usually empty), so messages render without custom emoji.
 
-Maps loaded:
-  - data/emoji_map.json       — dex_number → custom_emoji_id  (Pokemon)
-  - data/item_emoji_map.json  — item_slug  → custom_emoji_id  (Items)
-  - data/type_emoji_map.json  — type_name  → custom_emoji_id  (Types)
+Maps loaded (per-bot):
+  - data/emoji_map_{bot_id}.json       — dex_number → custom_emoji_id  (Pokemon)
+  - data/item_emoji_map_{bot_id}.json  — item_slug  → custom_emoji_id  (Items)
+  - data/type_emoji_map_{bot_id}.json  — type_name  → custom_emoji_id  (Types)
 
 Usage:
     # At startup (called from main.py after bot.get_me()):
@@ -34,6 +34,7 @@ _ITEM_MAP: dict[str, str] = {}
 _TYPE_MAP: dict[str, str] = {}
 _LOADED = False
 _PREMIUM_MODE = False
+_BOT_ID: int | None = None
 
 # Bot IDs
 _PREMIUM_BOT_ID = 8756134860
@@ -89,35 +90,33 @@ _ITEM_UNICODE: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
+def _load_json(filename: str) -> dict:
+    """Load a JSON map file, trying per-bot name first, then generic fallback."""
+    if _BOT_ID is not None:
+        bot_path = _DATA_DIR / filename.replace(".json", f"_{_BOT_ID}.json")
+        if bot_path.exists():
+            try:
+                return json.loads(bot_path.read_text())
+            except Exception:
+                pass
+    # Fallback to generic name (backwards compatibility)
+    path = _DATA_DIR / filename
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            pass
+    return {}
+
+
 def _load_maps() -> None:
     global _EMOJI_MAP, _ITEM_MAP, _TYPE_MAP, _LOADED
     if _LOADED:
         return
 
-    # Pokemon emoji map
-    path = _DATA_DIR / "emoji_map.json"
-    if path.exists():
-        try:
-            _EMOJI_MAP = json.loads(path.read_text())
-        except Exception:
-            _EMOJI_MAP = {}
-
-    # Item emoji map
-    path = _DATA_DIR / "item_emoji_map.json"
-    if path.exists():
-        try:
-            _ITEM_MAP = json.loads(path.read_text())
-        except Exception:
-            _ITEM_MAP = {}
-
-    # Type emoji map
-    path = _DATA_DIR / "type_emoji_map.json"
-    if path.exists():
-        try:
-            _TYPE_MAP = json.loads(path.read_text())
-        except Exception:
-            _TYPE_MAP = {}
-
+    _EMOJI_MAP = _load_json("emoji_map.json")
+    _ITEM_MAP = _load_json("item_emoji_map.json")
+    _TYPE_MAP = _load_json("type_emoji_map.json")
     _LOADED = True
 
 
@@ -132,8 +131,10 @@ def init_emoji(bot_id: int) -> None:
     Args:
         bot_id: The Telegram bot user ID.
     """
-    global _PREMIUM_MODE
+    global _PREMIUM_MODE, _BOT_ID, _LOADED
+    _BOT_ID = bot_id
     _PREMIUM_MODE = bot_id == _PREMIUM_BOT_ID
+    _LOADED = False  # Force reload with new bot_id
     _load_maps()
 
 
