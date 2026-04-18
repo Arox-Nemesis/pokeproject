@@ -20,6 +20,7 @@ from telemon.core.items import (
 )
 from telemon.config import BOT_NAME, CURRENCY_SHORT
 from telemon.core.constants import MAX_FRIENDSHIP, MAX_LEVEL, MAX_IV_TOTAL
+from telemon.core.emoji import item_emoji
 from telemon.database.models import InventoryItem, Item, Pokemon, User
 from telemon.logging import get_logger
 
@@ -106,7 +107,8 @@ def _build_category_text(key: str) -> str:
     cat = SHOP_CATEGORIES[key]
     lines = [f"<b>{cat['emoji']} {cat['title']}</b>\n"]
     for item in cat["items"]:
-        lines.append(f"  <code>{item['id']}</code> {item['name']} — {item['cost']:,} {CURRENCY_SHORT}")
+        ie = item_emoji(item["name"])
+        lines.append(f"  <code>{item['id']}</code> {ie}{item['name']} — {item['cost']:,} {CURRENCY_SHORT}")
     lines.append(f"\n<i>/buy [id] [qty] to purchase.  /shopinfo [id] for details.</i>")
     return "\n".join(lines)
 
@@ -351,7 +353,8 @@ async def cmd_inventory(message: Message, session: AsyncSession, user: User) -> 
         if cat_key in categories:
             lines.append(f"\n<b>{cat_label} Items</b>")
             for item_id, item_name, qty in categories[cat_key]:
-                lines.append(f"  <code>{item_id}</code> {item_name} x{qty}")
+                ie = item_emoji(item_name)
+                lines.append(f"  <code>{item_id}</code> {ie}{item_name} x{qty}")
 
     lines.append("\n<i>Use /use [item_id] [qty|max] [pokemon#] to use an item.\nUse /sell [item_id] [qty|max] to sell items.</i>")
 

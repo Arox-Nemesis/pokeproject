@@ -1,4 +1,4 @@
-"""Pokemon sprite emoji helper — loads emoji_map.json and provides inline emoji tags.
+"""Pokemon sprite emoji helper — loads emoji maps and provides inline emoji tags.
 
 Supports two modes based on the bot ID detected at startup:
   - Premium mode (bot ID 8756134860): Returns <tg-emoji> HTML tags for inline
@@ -6,13 +6,18 @@ Supports two modes based on the bot ID detected at startup:
   - Plain mode   (bot ID 7939028029 or any other): Returns the fallback string
     (usually empty), so messages render without custom emoji.
 
+Maps loaded:
+  - data/emoji_map.json       — dex_number → custom_emoji_id  (Pokemon)
+  - data/item_emoji_map.json  — item_slug  → custom_emoji_id  (Items)
+  - data/type_emoji_map.json  — type_name  → custom_emoji_id  (Types)
+
 Usage:
     # At startup (called from main.py after bot.get_me()):
     from telemon.core.emoji import init_emoji
     init_emoji(bot_info.id)
 
     # Anywhere in handlers:
-    from telemon.core.emoji import poke_emoji, type_emoji
+    from telemon.core.emoji import poke_emoji, type_emoji, item_emoji
     text = f"{poke_emoji(25)} Pikachu"
 """
 
@@ -25,6 +30,8 @@ from pathlib import Path
 # Internal state
 # ---------------------------------------------------------------------------
 _EMOJI_MAP: dict[str, str] = {}
+_ITEM_MAP: dict[str, str] = {}
+_TYPE_MAP: dict[str, str] = {}
 _LOADED = False
 _PREMIUM_MODE = False
 
@@ -32,8 +39,11 @@ _PREMIUM_MODE = False
 _PREMIUM_BOT_ID = 8756134860
 _PLAIN_BOT_ID = 7939028029
 
+# Data directory
+_DATA_DIR = Path(__file__).parent.parent.parent.parent / "data"
+
 # ---------------------------------------------------------------------------
-# Type emoji mappings (Unicode fallback + custom emoji IDs if available)
+# Type emoji mappings (Unicode fallbacks — always available)
 # ---------------------------------------------------------------------------
 _TYPE_UNICODE: dict[str, str] = {
     "normal": "⚪",
@@ -56,20 +66,58 @@ _TYPE_UNICODE: dict[str, str] = {
     "fairy": "🧚",
 }
 
+# ---------------------------------------------------------------------------
+# Item emoji mappings (Unicode fallbacks)
+# ---------------------------------------------------------------------------
+_ITEM_UNICODE: dict[str, str] = {
+    "fire-stone": "🔥",
+    "water-stone": "💧",
+    "thunder-stone": "⚡",
+    "leaf-stone": "🌿",
+    "moon-stone": "🌙",
+    "sun-stone": "☀️",
+    "dusk-stone": "🌑",
+    "dawn-stone": "🌅",
+    "shiny-stone": "✨",
+    "ice-stone": "❄️",
+    "rare-candy": "🍬",
+    "lucky-egg": "🥚",
+    "soothe-bell": "🔔",
+}
+
 
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
-def _load_map() -> None:
-    global _EMOJI_MAP, _LOADED
+def _load_maps() -> None:
+    global _EMOJI_MAP, _ITEM_MAP, _TYPE_MAP, _LOADED
     if _LOADED:
         return
-    map_path = Path(__file__).parent.parent.parent.parent / "data" / "emoji_map.json"
-    if map_path.exists():
+
+    # Pokemon emoji map
+    path = _DATA_DIR / "emoji_map.json"
+    if path.exists():
         try:
-            _EMOJI_MAP = json.loads(map_path.read_text())
+            _EMOJI_MAP = json.loads(path.read_text())
         except Exception:
             _EMOJI_MAP = {}
+
+    # Item emoji map
+    path = _DATA_DIR / "item_emoji_map.json"
+    if path.exists():
+        try:
+            _ITEM_MAP = json.loads(path.read_text())
+        except Exception:
+            _ITEM_MAP = {}
+
+    # Type emoji map
+    path = _DATA_DIR / "type_emoji_map.json"
+    if path.exists():
+        try:
+            _TYPE_MAP = json.loads(path.read_text())
+        except Exception:
+            _TYPE_MAP = {}
+
     _LOADED = True
 
 
@@ -86,18 +134,22 @@ def init_emoji(bot_id: int) -> None:
     """
     global _PREMIUM_MODE
     _PREMIUM_MODE = bot_id == _PREMIUM_BOT_ID
-    _load_map()
+    _load_maps()
 
 
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
-def reload_emoji_map() -> int:
-    """Force reload the emoji map. Returns count of loaded emoji."""
+def reload_all_maps() -> dict[str, int]:
+    """Force reload all emoji maps. Returns counts per category."""
     global _LOADED
     _LOADED = False
-    _load_map()
-    return len(_EMOJI_MAP)
+    _load_maps()
+    return {
+        "pokemon": len(_EMOJI_MAP),
+        "items": len(_ITEM_MAP),
+        "types": len(_TYPE_MAP),
+    }
 
 
 def is_premium() -> bool:
@@ -110,6 +162,30 @@ def mode_label() -> str:
     return "✨ Premium" if _PREMIUM_MODE else "Standard"
 
 
+def emoji_count() -> int:
+    """Return how many Pokemon emoji are loaded."""
+    _load_maps()
+    return len(_EMOJI_MAP)
+
+
+def total_emoji_count() -> dict[str, int]:
+    """Return counts for all emoji categories."""
+    _load_maps()
+    return {
+        "pokemon": len(_EMOJI_MAP),
+        "items": len(_ITEM_MAP),
+        "types": len(_TYPE_MAP),
+    }
+
+
+def _tg_emoji_tag(emoji_id: str, placeholder: str = "🔴") -> str:
+    """Build a <tg-emoji> HTML tag."""
+    return f'<tg-emoji emoji-id="{emoji_id}">{placeholder}</tg-emoji>'
+
+
+# ---------------------------------------------------------------------------
+# Pokemon emoji
+# ---------------------------------------------------------------------------
 def poke_emoji(dex_number: int, fallback: str = "") -> str:
     """Get an inline custom emoji tag for a Pokemon species.
 
@@ -126,31 +202,76 @@ def poke_emoji(dex_number: int, fallback: str = "") -> str:
     """
     if not _PREMIUM_MODE:
         return fallback
-    _load_map()
+    _load_maps()
     eid = _EMOJI_MAP.get(str(dex_number))
     if not eid:
         return fallback
-    return f'<tg-emoji emoji-id="{eid}">🔴</tg-emoji>'
+    return _tg_emoji_tag(eid)
 
 
+def has_emoji(dex_number: int) -> bool:
+    """Check if we have a custom emoji for this species."""
+    _load_maps()
+    return str(dex_number) in _EMOJI_MAP
+
+
+# ---------------------------------------------------------------------------
+# Type emoji
+# ---------------------------------------------------------------------------
 def type_emoji(type_name: str) -> str:
     """Get an emoji badge for a Pokemon type.
 
-    Returns the standard Unicode emoji for the type.  Works in both modes.
+    In premium mode with type emoji uploaded, returns a custom emoji tag.
+    Otherwise returns the standard Unicode emoji for the type.
 
     Args:
         type_name: Type name (e.g. "fire", "water").
 
     Returns:
-        Emoji string.
+        Emoji string (custom or Unicode).
     """
-    return _TYPE_UNICODE.get(type_name.lower(), "")
+    lower = type_name.lower()
+    if _PREMIUM_MODE:
+        _load_maps()
+        eid = _TYPE_MAP.get(lower)
+        if eid:
+            fallback = _TYPE_UNICODE.get(lower, "")
+            return _tg_emoji_tag(eid, fallback or "⚪")
+    return _TYPE_UNICODE.get(lower, "")
 
 
+# ---------------------------------------------------------------------------
+# Item emoji
+# ---------------------------------------------------------------------------
+def item_emoji(item_name: str, fallback: str = "") -> str:
+    """Get an inline custom emoji tag for an item.
+
+    Args:
+        item_name: Item name (e.g. "Fire Stone") or slug (e.g. "fire-stone").
+        fallback: String to return when custom emoji is unavailable.
+
+    Returns:
+        HTML string, Unicode fallback, or empty string.
+    """
+    # Normalize to slug format
+    slug = item_name.lower().replace("'", "").replace(" ", "-")
+
+    if _PREMIUM_MODE:
+        _load_maps()
+        eid = _ITEM_MAP.get(slug)
+        if eid:
+            placeholder = _ITEM_UNICODE.get(slug, "🎒")
+            return _tg_emoji_tag(eid, placeholder)
+
+    # Unicode fallback
+    return _ITEM_UNICODE.get(slug, fallback)
+
+
+# ---------------------------------------------------------------------------
+# Rarity emoji (works in both modes — Unicode only)
+# ---------------------------------------------------------------------------
 def rarity_emoji(species) -> str:
     """Get a rarity emoji string from a PokemonSpecies object.
-
-    Works in both modes (uses Unicode emoji).
 
     Args:
         species: A PokemonSpecies-like object with ``is_mythical``,
@@ -170,15 +291,3 @@ def rarity_emoji(species) -> str:
     if species.catch_rate <= 120:
         return "🔹 Uncommon"
     return ""
-
-
-def has_emoji(dex_number: int) -> bool:
-    """Check if we have a custom emoji for this species."""
-    _load_map()
-    return str(dex_number) in _EMOJI_MAP
-
-
-def emoji_count() -> int:
-    """Return how many emoji are loaded."""
-    _load_map()
-    return len(_EMOJI_MAP)

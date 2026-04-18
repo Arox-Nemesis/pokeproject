@@ -185,13 +185,16 @@ async def main() -> None:
         bot_info = await bot.get_me()
 
         # Detect emoji mode based on bot ID
-        from telemon.core.emoji import init_emoji, mode_label, emoji_count
+        from telemon.core.emoji import init_emoji, mode_label, total_emoji_count
 
         init_emoji(bot_info.id)
+        counts = total_emoji_count()
         logger.info(
             "Emoji mode configured",
             mode=mode_label(),
-            emoji_count=emoji_count(),
+            pokemon_emoji=counts["pokemon"],
+            item_emoji=counts["items"],
+            type_emoji=counts["types"],
         )
 
         logger.info(

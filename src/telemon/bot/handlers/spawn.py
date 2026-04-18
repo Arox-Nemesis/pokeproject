@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import settings
-from telemon.core.emoji import poke_emoji, rarity_emoji
+from telemon.core.emoji import rarity_emoji
 from telemon.core.spawning import check_spawn_trigger, create_spawn, get_random_species
 from telemon.database.models import ActiveSpawn, Group, PokemonSpecies
 from telemon.logging import get_logger
@@ -76,14 +76,13 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
     from telemon.core.imaging import generate_spawn_image
 
     species = spawn.species
-    sprite = poke_emoji(species.national_dex)
 
     # Build spawn message
     shiny_text = " ✨ SHINY!" if spawn.is_shiny else ""
     rarity_text = get_rarity_text(species)
 
     caption = (
-        f"{sprite}🔴 <b>A wild Pokémon has appeared!</b>{shiny_text}\n"
+        f"🔴 <b>A wild Pokémon has appeared!</b>{shiny_text}\n"
         f"{rarity_text}\n\n"
         f"Type <code>/catch [name]</code> to catch it!\n"
         f"Use <code>/hint</code> if you need help.\n\n"
