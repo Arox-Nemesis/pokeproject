@@ -138,24 +138,8 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     spawn.caught_by = user.telegram_id
     spawn.caught_at = datetime.utcnow()
 
-    # Calculate rewards
-    from telemon.config import settings
-
-    reward = random.randint(settings.catch_reward_min, settings.catch_reward_max)
-
-    # Bonus for rarity
-    if spawn.species.is_legendary:
-        reward *= 5
-    elif spawn.species.is_mythical:
-        reward *= 10
-    elif spawn.species.rarity == "rare":
-        reward *= 2
-
-    # Bonus for shiny
-    if spawn.is_shiny:
-        reward *= 3
-
-    user.balance += reward
+    # Rewards — only from new dex entries, milestones, and quests
+    reward = 0
 
     # Update pokedex
     is_new_pokedex_entry = False
@@ -371,7 +355,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
         # We continue to send the success message even if secondary updates failed
 
     # Build response message
-    shiny_text = " ✨ SHINY" if spawn.is_shiny else ""
+    shiny_text = " ✨ " if spawn.is_shiny else ""
 
     # IV quality rating
     if iv_percent >= 90:
@@ -387,40 +371,32 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
 
     sprite = poke_emoji(spawn.species.national_dex)
     msg_lines = [
-        f"<b>Congratulations {user.display_name}!</b>\n",
-        f"{sprite}You caught a{shiny_text} <b>{spawn.species.name}</b>!\n",
-        f"Level: {new_pokemon.level}",
-        f"IVs: {iv_percent}% ({iv_rating})",
-        f"Nature: {nature.capitalize()}",
+        f"<b>Congratulations {user.display_name}!</b> You caught a level {new_pokemon.level}{shiny_text}{sprite}<b>{spawn.species.name}</b>! (IV: {iv_percent:.2f}%)",
+        # f"IVs: {iv_percent}% ({iv_rating})",
     ]
 
-    if gender:
-        msg_lines.append(f"Gender: {'♀' if gender == 'female' else '♂'}")
-
-    msg_lines.append(f"\n+{reward} {CURRENCY_NAME}")
-
-    # Pokedex bonus message
+    # Reward messages — only for new dex entries, milestones, quests
     if is_new_pokedex_entry:
-        msg_lines.append(f"📖 Added to Pokédex! (+{pokedex_bonus} bonus)")
+        msg_lines.append(f"\n\n📖 New Pokédex entry! (+{pokedex_bonus} {CURRENCY_NAME})")
     elif pokedex_bonus > 0:
         catches = pokedex_entry.times_caught
-        msg_lines.append(f"🏆 {catches}x catch milestone! (+{pokedex_bonus} bonus)")
+        msg_lines.append(f"\n\n🏆 {catches}x catch milestone! (+{pokedex_bonus} {CURRENCY_NAME})")
 
     # Shiny chain message
     if chain_msg:
-        msg_lines.append(chain_msg)
+        msg_lines.append(f"\n{chain_msg}")
 
     # XP gain message
     if xp_msg:
-        msg_lines.append(xp_msg)
+        msg_lines.append(f"\n{xp_msg}")
 
     # Quest progress
     if quest_msg:
-        msg_lines.append(quest_msg)
+        msg_lines.append(f"\n{quest_msg}")
 
     # Achievements
     if ach_notifications:
-        msg_lines.append(ach_notifications)
+        msg_lines.append(f"\n{ach_notifications}")
 
     await message.answer("\n".join(msg_lines))
 

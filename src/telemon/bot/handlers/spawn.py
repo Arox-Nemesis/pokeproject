@@ -82,10 +82,9 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
     rarity_text = get_rarity_text(species)
 
     caption = (
-        f"🔴 <b>A wild Pokémon has appeared!</b>{shiny_text}\n"
-        f"{rarity_text}\n\n"
+        f"<b>A wild Pokémon has appeared!</b>{shiny_text}\n\n"
         f"Type <code>/catch [name]</code> to catch it!\n"
-        f"Use <code>/hint</code> if you need help.\n\n"
+        f"Use <code>/hint</code> if you need help.\n"
         f"<i>It will flee in {settings.spawn_timeout_seconds // 60} minutes...</i>"
     )
 
