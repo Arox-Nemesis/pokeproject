@@ -447,11 +447,11 @@ async def get_last_emoji_id(
 # Upload: Pokemon sprites
 # ──────────────────────────────────────────────
 def pokemon_set_name(batch: int, username: str) -> str:
-    return f"telemon_emoji_v3_{batch}_by_{username}"
+    return f"telemon{batch}_by_{username}"
 
 
 def pokemon_set_title(batch: int, start: int, end: int) -> str:
-    return f"Telemon Emoji v3 #{start:04d}-#{end:04d}"
+    return f"Telemon #{start:04d}-{end:04d}"
 
 
 async def upload_pokemon(dry_run: bool = False) -> None:
@@ -559,7 +559,7 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                     if batch_start_dex <= d <= batch_end_dex
                 )
 
-                if set_exists and existing_count >= len(dex_list):
+                if set_exists and existing_count >= len(full_batch_dex):
                     # Full — identity remap using actual dex list
                     stickers = set_data.get("stickers", [])
                     mapped = 0
@@ -888,8 +888,8 @@ async def remap_pokemon() -> None:
                 found = False
 
                 for uname in search_names:
-                    for version in ("v3", "v2"):
-                        sname = f"telemon_emoji_{version}_{batch}_by_{uname}"
+                    snames_to_try = [f"telemon{batch}_by_{uname}", f"telemon_emoji_v4_{batch}_by_{uname}", f"telemon_emoji_v3_{batch}_by_{uname}", f"telemon_emoji_v2_{batch}_by_{uname}"]
+                    for sname in snames_to_try:
                         set_data = await get_sticker_set(http, bot_token, sname)
                         if set_data:
                             stickers = set_data.get("stickers", [])
@@ -902,7 +902,7 @@ async def remap_pokemon() -> None:
                                         emoji_map[str(dex)] = eid
                                         mapped += 1
                             print(
-                                f"  Set {batch} (@{uname}/{version}): "
+                                f"  Set {batch} ({sname}): "
                                 f"{len(stickers)} stickers → {mapped} mapped"
                             )
                             found = True
