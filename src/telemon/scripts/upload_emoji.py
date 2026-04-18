@@ -187,24 +187,42 @@ def load_local_sprite(path: Path) -> bytes | None:
 async def load_pokemon_sprite(
     http: aiohttp.ClientSession, pokemon_id: int
 ) -> bytes | None:
-    """Load Pokemon sprite — local first, remote fallback."""
+    """Load Pokemon sprite — local first, remote fallback. Retries until success."""
     # Try local
     data = load_local_sprite(POKEMON_SPRITE_DIR / f"{pokemon_id}.png")
     if data:
         return data
 
-    # Remote fallback
+    # Remote fallback with retry
     url = SPRITE_REMOTE_BASE.format(pid=pokemon_id)
-    try:
-        async with http.get(url) as resp:
-            if resp.status != 200:
+    attempt = 0
+    max_format_retries = 5  # Cap retries for format errors (not transient)
+    while True:
+        attempt += 1
+        try:
+            async with http.get(url) as resp:
+                if resp.status == 404:
+                    return None
+                if resp.status != 200:
+                    raise Exception(f"HTTP {resp.status}")
+                raw = await resp.read()
+                if len(raw) < 100:
+                    raise Exception("Response too small")
+                result = process_sprite(raw)
+                if result:
+                    return result
+                # Image format unsupported (SVG, GIF, etc.) — cap retries
+                if attempt >= max_format_retries:
+                    print(f"  [SKIP] Sprite {pokemon_id}: unsupported format after {attempt} tries")
+                    return None
+                raise Exception("process_sprite returned None")
+        except Exception as e:
+            if attempt >= max_format_retries and "process_sprite" in str(e):
                 return None
-            raw = await resp.read()
-            if len(raw) < 100:
-                return None
-            return process_sprite(raw)
-    except Exception:
-        return None
+            wait = min(2 ** attempt, 30)
+            if attempt <= 3:
+                print(f"  [WARN] Sprite {pokemon_id} attempt {attempt}: {e} — retry in {wait}s")
+            await asyncio.sleep(wait)
 
 
 # ──────────────────────────────────────────────
@@ -534,16 +552,23 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                 set_exists = set_data is not None
                 existing_count = len(set_data.get("stickers", [])) if set_data else 0
 
+                # Build the full ordered dex list for this batch
+                # (all dex with sprites, in sorted order)
+                full_batch_dex = sorted(
+                    d for d in sprites
+                    if batch_start_dex <= d <= batch_end_dex
+                )
+
                 if set_exists and existing_count >= len(dex_list):
-                    # Full — remap by position
+                    # Full — identity remap using actual dex list
                     stickers = set_data.get("stickers", [])
                     mapped = 0
                     for idx, s in enumerate(stickers):
-                        d = batch_start_dex + idx
-                        eid = s.get("custom_emoji_id", "")
-                        if eid and d <= batch_end_dex:
-                            emoji_map[str(d)] = eid
-                            mapped += 1
+                        if idx < len(full_batch_dex):
+                            eid = s.get("custom_emoji_id", "")
+                            if eid:
+                                emoji_map[str(full_batch_dex[idx])] = eid
+                                mapped += 1
                     _progress["done"] += mapped
                     print(
                         f"  Set {batch_num}: full ({existing_count}) → remapped {mapped}"
@@ -582,15 +607,15 @@ async def upload_pokemon(dry_run: bool = False) -> None:
                             f"ETA {eta_str(upload_start, _progress['done'], _progress['total'])}"
                         )
 
-                # Map positions at end
+                # Identity-based mapping: position → actual dex number
                 set_data = await get_sticker_set(http, bot_token, sname)
                 if set_data:
                     stickers = set_data.get("stickers", [])
                     for idx, s in enumerate(stickers):
-                        d = batch_start_dex + idx
-                        eid = s.get("custom_emoji_id", "")
-                        if eid:
-                            emoji_map[str(d)] = eid
+                        if idx < len(full_batch_dex):
+                            eid = s.get("custom_emoji_id", "")
+                            if eid:
+                                emoji_map[str(full_batch_dex[idx])] = eid
 
                 map_file.write_text(json.dumps(emoji_map, indent=2))
                 print(
