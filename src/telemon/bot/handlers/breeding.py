@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -18,12 +20,20 @@ from telemon.core.breeding import (
     hatch_egg,
     remove_from_daycare,
 )
-from telemon.core.constants import iv_percentage
+from telemon.core.constants import BREED_COOLDOWN_SECONDS, iv_percentage
 from telemon.database.models import Pokemon, User
 from telemon.logging import get_logger
 
 router = Router(name="breeding")
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Cooldown Tracking
+# ---------------------------------------------------------------------------
+_breed_cooldowns: dict[int, datetime] = {}
+_BREED_COOLDOWN_MAX_SIZE = 1000
+
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +220,25 @@ async def cmd_breed(message: Message, session: AsyncSession) -> None:
         return
 
     user_id = message.from_user.id
+    now = datetime.utcnow()
+
+    # Cooldown check
+    if user_id in _breed_cooldowns:
+        elapsed = (now - _breed_cooldowns[user_id]).total_seconds()
+        if elapsed < BREED_COOLDOWN_SECONDS:
+            remaining = int(BREED_COOLDOWN_SECONDS - elapsed)
+            mins = remaining // 60
+            secs = remaining % 60
+            await message.answer(f"⏳ Your Pokemon need to rest! You can breed again in {mins}m {secs}s.")
+            return
+
+    # Prune expired cooldowns to prevent memory leak
+    if len(_breed_cooldowns) > _BREED_COOLDOWN_MAX_SIZE:
+        cutoff = now - timedelta(seconds=BREED_COOLDOWN_SECONDS)
+        expired = [uid for uid, ts in _breed_cooldowns.items() if ts < cutoff]
+        for uid in expired:
+            del _breed_cooldowns[uid]
+
     slots = await get_daycare_slots(session, user_id)
 
     if len(slots) < 2:
@@ -239,6 +268,9 @@ async def cmd_breed(message: Message, session: AsyncSession) -> None:
         return
 
     await session.commit()
+
+    # Set cooldown on successful breed
+    _breed_cooldowns[user_id] = datetime.utcnow()
 
     species_name = egg.species.name if egg.species else f"#{egg.species_id}"
     shiny_text = " ✨" if egg.is_shiny else ""

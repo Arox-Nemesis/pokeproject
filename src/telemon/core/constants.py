@@ -41,6 +41,7 @@ MARKET_MIN_PRICE: int = 100
 MARKET_MAX_PRICE: int = 1_000_000_000
 MARKET_LISTING_DAYS: int = 7
 WT_COOLDOWN_SECONDS: int = 300
+BREED_COOLDOWN_SECONDS: int = 1800
 
 # ------------------------------------------------------------------ #
 # Natures (25 canonical Pokemon natures, sorted)
