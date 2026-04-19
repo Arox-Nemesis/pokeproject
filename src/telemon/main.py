@@ -115,62 +115,44 @@ async def timed_spawn_loop(bot) -> None:
         await asyncio.sleep(60)
 
 
-async def incense_dm_spawn_loop(bot) -> None:
-    """Background task: spawn Pokemon in DMs for users with active Incense.
+async def incense_spawn_loop(bot) -> None:
+    """Background task: spawn Pokemon every 10 seconds for active incense.
 
-    Checks every 30 seconds.  Each user gets a random spawn interval
-    between 2-5 minutes, re-rolled after each spawn.
+    Handles both DM incense (user.incense_spawns_remaining > 0) and
+    group incense (group.incense_spawns_remaining > 0).
+    Decrements the counter after each spawn.
     """
-    import random
-    from datetime import datetime, timedelta
     from sqlalchemy import select
     from telemon.database import async_session_factory
-    from telemon.database.models import User
+    from telemon.database.models import User, Group
     from telemon.core.spawning import create_spawn, get_random_species, get_active_spawn
 
-    await asyncio.sleep(30)  # Wait after startup
-
-    # Per-user last DM spawn time + next interval
-    _user_state: dict[int, tuple[datetime, float]] = {}  # uid -> (last_spawn, interval_min)
-    _MAX_STATE_SIZE = 500
+    await asyncio.sleep(15)  # Wait after startup
 
     while True:
         try:
             async with async_session_factory() as session:
-                now = datetime.utcnow()
-
-                # Find users with active incense
+                # ── DM incense: users with remaining spawns ──
                 result = await session.execute(
-                    select(User).where(User.incense_until > now)
+                    select(User).where(User.incense_spawns_remaining > 0)
                 )
                 users = result.scalars().all()
 
                 for user in users:
                     uid = user.telegram_id
 
-                    # Get or create per-user spawn state
-                    if uid not in _user_state:
-                        _user_state[uid] = (now, random.uniform(2, 5))
-
-                    last_spawn, interval_min = _user_state[uid]
-                    cutoff = last_spawn + timedelta(minutes=interval_min)
-
-                    if now < cutoff:
-                        continue  # Not time yet
-
-                    # Check for existing active spawn in DM
+                    # Skip if there's already an uncaught spawn in DM
                     active = await get_active_spawn(session, uid)
                     if active:
                         continue
 
-                    # Spawn a Pokemon in the user's DM
                     species = await get_random_species(session)
                     if not species:
                         continue
 
                     spawn = await create_spawn(
                         session=session,
-                        chat_id=uid,  # DM chat_id == user's telegram_id
+                        chat_id=uid,
                         message_id=0,
                         species=species,
                     )
@@ -180,38 +162,66 @@ async def incense_dm_spawn_loop(bot) -> None:
                         msg_id = await send_spawn_message(bot, uid, spawn)
                         if msg_id:
                             spawn.message_id = msg_id
+                            user.incense_spawns_remaining -= 1
                             await session.commit()
                             logger.info(
                                 "Incense DM spawn",
                                 user_id=uid,
                                 species=species.name,
+                                remaining=user.incense_spawns_remaining,
                             )
                         else:
                             await session.delete(spawn)
+                            user.incense_spawns_remaining = 0  # Stop trying
                             await session.commit()
-                            logger.debug(
-                                "Incense DM spawn failed to send",
-                                user_id=uid,
+
+                # ── Group incense: groups with remaining spawns ──
+                result = await session.execute(
+                    select(Group).where(Group.incense_spawns_remaining > 0)
+                )
+                groups = result.scalars().all()
+
+                for group in groups:
+                    cid = group.chat_id
+
+                    active = await get_active_spawn(session, cid)
+                    if active:
+                        continue
+
+                    species = await get_random_species(session)
+                    if not species:
+                        continue
+
+                    spawn = await create_spawn(
+                        session=session,
+                        chat_id=cid,
+                        message_id=0,
+                        species=species,
+                    )
+
+                    if spawn:
+                        from telemon.bot.handlers.spawn import send_spawn_message
+                        msg_id = await send_spawn_message(bot, cid, spawn)
+                        if msg_id:
+                            spawn.message_id = msg_id
+                            group.incense_spawns_remaining -= 1
+                            group.total_spawns += 1
+                            await session.commit()
+                            logger.info(
+                                "Incense group spawn",
+                                chat_id=cid,
+                                species=species.name,
+                                remaining=group.incense_spawns_remaining,
                             )
-
-                    # Re-roll interval
-                    _user_state[uid] = (now, random.uniform(2, 5))
-
-                # Prune expired users from state
-                expired = [uid for uid in _user_state if uid not in {u.telegram_id for u in users}]
-                for uid in expired:
-                    del _user_state[uid]
-
-                # Cap state size
-                if len(_user_state) > _MAX_STATE_SIZE:
-                    oldest = sorted(_user_state, key=lambda u: _user_state[u][0])
-                    for uid in oldest[:len(_user_state) - _MAX_STATE_SIZE]:
-                        del _user_state[uid]
+                        else:
+                            await session.delete(spawn)
+                            group.incense_spawns_remaining = 0
+                            await session.commit()
 
         except Exception as e:
-            logger.error("Error in incense DM spawn loop", error=str(e))
+            logger.error("Error in incense spawn loop", error=str(e))
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(10)
 
 
 async def trade_expiry_loop(bot) -> None:
@@ -340,7 +350,7 @@ async def main() -> None:
 
         # Start background tasks
         spawn_task = asyncio.create_task(timed_spawn_loop(bot))
-        incense_task = asyncio.create_task(incense_dm_spawn_loop(bot))
+        incense_task = asyncio.create_task(incense_spawn_loop(bot))
         trade_expiry_task = asyncio.create_task(trade_expiry_loop(bot))
 
         # Register global error handler for rate limiting

@@ -21,6 +21,23 @@ logger = get_logger(__name__)
 
 
 # ------------------------------------------------------------------ #
+# Runtime configuration (overrides settings without restart)
+# ------------------------------------------------------------------ #
+
+_runtime_overrides: dict[str, int] = {}
+
+# Allowed config keys and their (min, max) bounds
+_CONFIG_KEYS: dict[str, tuple[int, int]] = {
+    "incense_count": (1, 500),
+}
+
+
+def get_runtime_config(key: str, default: int) -> int:
+    """Get a runtime-configurable value, falling back to default."""
+    return _runtime_overrides.get(key, default)
+
+
+# ------------------------------------------------------------------ #
 # Permission helpers
 # ------------------------------------------------------------------ #
 
@@ -829,6 +846,74 @@ async def cmd_list_spawners(message: Message, session: AsyncSession) -> None:
     )
 
     await message.answer("\n".join(lines))
+
+
+# ------------------------------------------------------------------ #
+# /setconfig  — bot owner runtime config
+# ------------------------------------------------------------------ #
+
+@router.message(Command("setconfig"))
+async def cmd_setconfig(message: Message) -> None:
+    """Set runtime configuration values. Bot owner only.
+
+    Usage:
+        /setconfig                      — show current values
+        /setconfig incense_count 30     — set incense spawn count to 30
+    """
+    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+        await message.answer("Only the bot owner can use this command!")
+        return
+
+    parts = (message.text or "").split()
+    parts = parts[1:]  # Remove /setconfig
+
+    if not parts:
+        # Show current config
+        from telemon.config import settings
+        lines = ["<b>Runtime Config</b>\n"]
+        for key, (lo, hi) in _CONFIG_KEYS.items():
+            current = _runtime_overrides.get(key)
+            default = getattr(settings, key.replace("incense_count", "incense_spawn_count"), "?")
+            if current is not None:
+                lines.append(f"<b>{key}</b>: {current} (override, default: {default})")
+            else:
+                lines.append(f"<b>{key}</b>: {default} (default, range: {lo}-{hi})")
+        lines.append("\n<i>Usage: /setconfig [key] [value]</i>")
+        await message.answer("\n".join(lines))
+        return
+
+    if len(parts) < 2:
+        await message.answer(
+            "Usage: <code>/setconfig [key] [value]</code>\n\n"
+            f"Available keys: {', '.join(_CONFIG_KEYS.keys())}"
+        )
+        return
+
+    key = parts[0].lower()
+    if key not in _CONFIG_KEYS:
+        await message.answer(
+            f"Unknown config key: <b>{key}</b>\n"
+            f"Available: {', '.join(_CONFIG_KEYS.keys())}"
+        )
+        return
+
+    try:
+        value = int(parts[1])
+    except ValueError:
+        await message.answer("Value must be a number!")
+        return
+
+    lo, hi = _CONFIG_KEYS[key]
+    if value < lo or value > hi:
+        await message.answer(f"Value must be between {lo} and {hi}!")
+        return
+
+    _runtime_overrides[key] = value
+    await message.answer(
+        f"✅ Set <b>{key}</b> = <b>{value}</b>\n"
+        f"Takes effect immediately for new incense activations."
+    )
+    logger.info("Runtime config changed", key=key, value=value, by=message.from_user.id)
 
 
 # ------------------------------------------------------------------ #

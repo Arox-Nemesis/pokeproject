@@ -64,7 +64,7 @@ ALL_ITEMS: list[dict[str, Any]] = [
 
     # ── Utility Items (IDs 201–203) ──
     {"id": 201, "name": "Rare Candy",   "name_lower": "rare candy",    "category": "utility", "cost": 200,  "sell_price": 100,  "is_consumable": True,  "is_holdable": False, "description": "Raises a Pokemon's level by 1."},
-    {"id": 202, "name": "Incense",      "name_lower": "incense",       "category": "utility", "cost": 500,  "sell_price": 250,  "is_consumable": True,  "is_holdable": False, "description": "Spawns Pokemon in your DMs for 1 hour. Group admins can use in groups for boosted spawns."},
+    {"id": 202, "name": "Incense",      "name_lower": "incense",       "category": "utility", "cost": 500,  "sell_price": 250,  "is_consumable": True,  "is_holdable": False, "description": "Attracts wild Pokemon! Spawns appear every 10 seconds. Group admins can use in groups."},
     {"id": 203, "name": "XP Boost",     "name_lower": "xp boost",      "category": "utility", "cost": 300,  "sell_price": 150,  "is_consumable": True,  "is_holdable": False, "description": "Earn 2x XP from catches and battles for 1 hour."},
 
     # ── Special Items (IDs 301–302) ──

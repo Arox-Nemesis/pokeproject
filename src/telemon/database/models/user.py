@@ -59,7 +59,7 @@ class User(Base, TimestampMixin):
     ban_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Active boosts
-    incense_until: Mapped[datetime | None] = mapped_column(nullable=True)
+    incense_spawns_remaining: Mapped[int] = mapped_column(Integer, default=0)
     xp_boost_until: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # Relationships

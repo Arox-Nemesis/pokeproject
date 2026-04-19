@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # Battle Configuration
     battle_turn_timeout_seconds: int = Field(default=60, ge=10)
 
+    # Incense Configuration
+    incense_spawn_count: int = Field(default=50, ge=1, le=500)
+
     # Shiny Configuration
     shiny_base_rate: int = Field(default=4096, ge=1)
 

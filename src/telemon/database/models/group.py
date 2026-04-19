@@ -55,7 +55,7 @@ class Group(Base, TimestampMixin):
     ban_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Group incense (activated by admin)
-    incense_until: Mapped[datetime | None] = mapped_column(nullable=True)
+    incense_spawns_remaining: Mapped[int] = mapped_column(Integer, default=0)
     incense_activated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     def __repr__(self) -> str:

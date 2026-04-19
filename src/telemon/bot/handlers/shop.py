@@ -612,9 +612,12 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
     # ── Incense ──
     if item_id == INCENSE_ID:
-        from datetime import timedelta
+        from telemon.config import settings
 
-        now = datetime.utcnow()
+        # Runtime-configurable spawn count
+        from telemon.bot.handlers.admin import get_runtime_config
+        spawn_count = get_runtime_config("incense_count", settings.incense_spawn_count)
+
         is_group = message.chat.type in ("group", "supergroup")
 
         if is_group:
@@ -640,16 +643,15 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
                 select(Group).where(Group.chat_id == message.chat.id)
             )
             group = group_result.scalar_one_or_none()
-            if group and group.incense_until and group.incense_until > now:
-                remaining = int((group.incense_until - now).total_seconds() / 60)
+            if group and group.incense_spawns_remaining > 0:
                 await message.answer(
-                    f"🕐 Group Incense is already active! ({remaining} min remaining)"
+                    f"🕐 Group Incense is already active! ({group.incense_spawns_remaining} spawns remaining)"
                 )
                 return
 
             # Activate group incense
             if group:
-                group.incense_until = now + timedelta(hours=1)
+                group.incense_spawns_remaining = spawn_count
                 group.incense_activated_by = user.telegram_id
             inventory_item.quantity -= 1
             await session.commit()
@@ -657,26 +659,25 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             await message.answer(
                 "🟢 <b>Group Incense Activated!</b>\n\n"
                 f"Activated by {user.display_name}\n"
-                "Pokémon will spawn <b>twice as often</b> in this group for 1 hour!\n\n"
+                f"<b>{spawn_count}</b> Pokémon will spawn every 10 seconds!\n\n"
                 f"<i>Incense remaining: {inventory_item.quantity}</i>"
             )
         else:
             # DM mode — check if already active
-            if user.incense_until and user.incense_until > now:
-                remaining = int((user.incense_until - now).total_seconds() / 60)
+            if user.incense_spawns_remaining > 0:
                 await message.answer(
-                    f"🕐 Your Incense is already active! ({remaining} min remaining)"
+                    f"🕐 Your Incense is already active! ({user.incense_spawns_remaining} spawns remaining)"
                 )
                 return
 
             # Activate personal incense
-            user.incense_until = now + timedelta(hours=1)
+            user.incense_spawns_remaining = spawn_count
             inventory_item.quantity -= 1
             await session.commit()
 
             await message.answer(
                 "🟢 <b>Incense Activated!</b>\n\n"
-                "Pokémon will spawn in your DMs for 1 hour!\n"
+                f"<b>{spawn_count}</b> Pokémon will spawn in your DMs every 10 seconds!\n"
                 "Stay ready with /catch when they appear.\n\n"
                 f"<i>Incense remaining: {inventory_item.quantity}</i>"
             )
@@ -686,6 +687,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             user_id=user.telegram_id,
             mode="group" if is_group else "dm",
             chat_id=message.chat.id,
+            spawn_count=spawn_count,
         )
         return
 
