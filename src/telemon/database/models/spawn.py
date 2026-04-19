@@ -22,10 +22,9 @@ class ActiveSpawn(Base):
         default=uuid.uuid4,
     )
 
-    # Group where spawn occurred
+    # Group or DM where spawn occurred
     chat_id: Mapped[int] = mapped_column(
         BigInteger,
-        ForeignKey("groups.chat_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -69,7 +68,6 @@ class ActiveSpawn(Base):
 
     # Relationships
     species = relationship("PokemonSpecies", lazy="joined")
-    group = relationship("Group", lazy="joined")
 
     def __repr__(self) -> str:
         return f"<ActiveSpawn {self.id} species={self.species_id} in {self.chat_id}>"
