@@ -325,7 +325,7 @@ async def _get_event_count(
 
     if event == "pokedex_update":
         r = await session.execute(
-            select(func.count(PokedexEntry.id)).where(
+            select(func.count(PokedexEntry.species_id)).where(
                 PokedexEntry.user_id == user_id
             )
         )

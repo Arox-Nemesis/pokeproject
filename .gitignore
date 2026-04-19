@@ -81,3 +81,4 @@ src/telemon_premium/
 *test*.py
 tests/
 test*.png
+agent/

@@ -81,12 +81,29 @@ async def timed_spawn_loop(bot) -> None:
                         msg_id = await send_spawn_message(bot, group.chat_id, spawn)
                         if msg_id:
                             spawn.message_id = msg_id
+
+                            # Only update spawn stats after confirmed delivery
+                            group.total_spawns += 1
+                            group.last_spawn_at = datetime.utcnow()
+
                             await session.commit()
                             logger.info(
                                 "Timed spawn triggered",
                                 chat_id=group.chat_id,
                                 species=species.name,
                                 interval_min=round(interval_mins, 1),
+                            )
+                        else:
+                            # send_spawn_message returned None — likely
+                            # "chat not found" or "bot was kicked".
+                            # Auto-disable spawns for this group so we stop
+                            # hammering a dead chat.
+                            await session.delete(spawn)
+                            group.spawn_enabled = False
+                            await session.commit()
+                            logger.warning(
+                                "Auto-disabled spawns for unreachable group",
+                                chat_id=group.chat_id,
                             )
                         # Re-roll interval for next time
                         _reroll_interval(group.chat_id)
@@ -112,16 +129,35 @@ async def trade_expiry_loop(bot) -> None:
         try:
             async with async_session_factory() as session:
                 cutoff = datetime.utcnow() - timedelta(minutes=5)
-                result = await session.execute(
-                    select(Trade).where(
-                        Trade.status.in_([
-                            TradeStatus.WAITING_ACCEPT,
-                            TradeStatus.PENDING,
-                            TradeStatus.CONFIRMED_ONE,
-                        ]),
-                        Trade.last_activity_at < cutoff,
+
+                # Use last_activity_at if available, fall back to created_at
+                # (last_activity_at requires an Alembic migration that may
+                # not have been applied yet).
+                try:
+                    result = await session.execute(
+                        select(Trade).where(
+                            Trade.status.in_([
+                                TradeStatus.WAITING_ACCEPT,
+                                TradeStatus.PENDING,
+                                TradeStatus.CONFIRMED_ONE,
+                            ]),
+                            Trade.last_activity_at < cutoff,
+                        )
                     )
-                )
+                except Exception:
+                    # Column doesn't exist yet — roll back the aborted
+                    # transaction before running the fallback query.
+                    await session.rollback()
+                    result = await session.execute(
+                        select(Trade).where(
+                            Trade.status.in_([
+                                TradeStatus.WAITING_ACCEPT,
+                                TradeStatus.PENDING,
+                                TradeStatus.CONFIRMED_ONE,
+                            ]),
+                            Trade.created_at < cutoff,
+                        )
+                    )
                 expired_trades = result.scalars().all()
 
                 for trade in expired_trades:
@@ -206,6 +242,20 @@ async def main() -> None:
         # Start background tasks
         spawn_task = asyncio.create_task(timed_spawn_loop(bot))
         trade_expiry_task = asyncio.create_task(trade_expiry_loop(bot))
+
+        # Register global error handler for rate limiting
+        from aiogram.exceptions import TelegramRetryAfter
+        from aiogram.types.error_event import ErrorEvent
+
+        @dp.errors()
+        async def handle_rate_limit(event: ErrorEvent):
+            if isinstance(event.exception, TelegramRetryAfter):
+                logger.warning(
+                    "Rate limited by Telegram",
+                    retry_after=event.exception.retry_after,
+                )
+                return True  # Suppress the error
+            return False
 
         # Start polling
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

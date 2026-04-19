@@ -196,6 +196,13 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     iv_total = sum(ivs.values())
     iv_percent = iv_percentage(iv_total)
 
+    # Initialize optional message fragments — these are set conditionally
+    # below and referenced unconditionally in the response builder.
+    chain_msg = None
+    quest_msg = None
+    xp_msg = None
+    ach_notifications = None
+
     try:
         # Update quest progress
         from telemon.core.quests import update_quest_progress
