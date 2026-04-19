@@ -58,6 +58,10 @@ class User(Base, TimestampMixin):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     ban_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Active boosts
+    incense_until: Mapped[datetime | None] = mapped_column(nullable=True)
+    xp_boost_until: Mapped[datetime | None] = mapped_column(nullable=True)
+
     # Relationships
     pokemon = relationship("Pokemon", back_populates="owner", lazy="dynamic")
     pokedex_entries = relationship("PokedexEntry", back_populates="user", lazy="dynamic")

@@ -64,8 +64,8 @@ ALL_ITEMS: list[dict[str, Any]] = [
 
     # ── Utility Items (IDs 201–203) ──
     {"id": 201, "name": "Rare Candy",   "name_lower": "rare candy",    "category": "utility", "cost": 200,  "sell_price": 100,  "is_consumable": True,  "is_holdable": False, "description": "Raises a Pokemon's level by 1."},
-    {"id": 202, "name": "Incense",      "name_lower": "incense",       "category": "utility", "cost": 500,  "sell_price": 250,  "is_consumable": True,  "is_holdable": False, "description": "Spawns Pokemon in DMs for 1 hour. (Coming soon)"},
-    {"id": 203, "name": "XP Boost",     "name_lower": "xp boost",      "category": "utility", "cost": 300,  "sell_price": 150,  "is_consumable": True,  "is_holdable": False, "description": "Earn 2x XP for 1 hour. (Coming soon)"},
+    {"id": 202, "name": "Incense",      "name_lower": "incense",       "category": "utility", "cost": 500,  "sell_price": 250,  "is_consumable": True,  "is_holdable": False, "description": "Spawns Pokemon in your DMs for 1 hour. Group admins can use in groups for boosted spawns."},
+    {"id": 203, "name": "XP Boost",     "name_lower": "xp boost",      "category": "utility", "cost": 300,  "sell_price": 150,  "is_consumable": True,  "is_holdable": False, "description": "Earn 2x XP from catches and battles for 1 hour."},
 
     # ── Special Items (IDs 301–302) ──
     {"id": 301, "name": "Shiny Charm",  "name_lower": "shiny charm",   "category": "special", "cost": 50000,  "sell_price": 25000, "is_consumable": False, "is_holdable": False, "description": "Triples your shiny odds! A must-have for shiny hunters."},
@@ -149,6 +149,8 @@ MEGA_STONE_IDS = {item["id"] for item in ALL_ITEMS if item["category"] == "mega_
 LINKING_CORD_ID = 29
 SOOTHE_BELL_ID = 30
 RARE_CANDY_ID = 201
+INCENSE_ID = 202
+XP_BOOST_ID = 203
 
 # Mega stone name → item dict (for quick lookup by held_item)
 MEGA_STONE_BY_NAME: dict[str, dict[str, Any]] = {

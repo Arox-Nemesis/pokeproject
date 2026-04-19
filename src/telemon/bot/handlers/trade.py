@@ -253,8 +253,8 @@ async def start_trade(
 
     # Build accept/reject keyboard
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Accept", callback_data=f"trade:accept:{trade.id}")
-    builder.button(text="❌ Reject", callback_data=f"trade:reject:{trade.id}")
+    builder.button(text="✅ Accept", callback_data=f"trade:accept:{trade.id}", style="success")
+    builder.button(text="❌ Reject", callback_data=f"trade:reject:{trade.id}", style="danger")
     builder.adjust(2)
 
     await message.answer(
@@ -327,8 +327,8 @@ async def start_trade_by_id(
 
     # Build accept/reject keyboard
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Accept", callback_data=f"trade:accept:{trade.id}")
-    builder.button(text="❌ Reject", callback_data=f"trade:reject:{trade.id}")
+    builder.button(text="✅ Accept", callback_data=f"trade:accept:{trade.id}", style="success")
+    builder.button(text="❌ Reject", callback_data=f"trade:reject:{trade.id}", style="danger")
     builder.adjust(2)
 
     await message.answer(

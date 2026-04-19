@@ -14,9 +14,11 @@ from telemon.core.items import (
     ALL_ITEMS,
     ITEM_BY_ID,
     ITEM_BY_NAME,
+    INCENSE_ID,
     LINKING_CORD_ID,
     RARE_CANDY_ID,
     SOOTHE_BELL_ID,
+    XP_BOOST_ID,
 )
 from telemon.config import BOT_NAME, CURRENCY_SHORT
 from telemon.core.constants import MAX_FRIENDSHIP, MAX_LEVEL, MAX_IV_TOTAL
@@ -92,6 +94,7 @@ def _build_shop_keyboard() -> InlineKeyboardBuilder:
         builder.button(
             text=f"{cat['emoji']} {cat['title']} ({count})",
             callback_data=f"shop:{key}",
+            style="primary",
         )
     builder.adjust(2)
     return builder
@@ -608,21 +611,110 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         return
 
     # ── Incense ──
-    if item_id == 202:
-        await message.answer(
-            "<b>Incense</b>\n\n"
-            "Incense feature coming soon!\n"
-            "When activated, Pokemon will spawn in your DMs for 1 hour."
+    if item_id == INCENSE_ID:
+        from datetime import timedelta
+
+        now = datetime.utcnow()
+        is_group = message.chat.type in ("group", "supergroup")
+
+        if is_group:
+            # Only group admins can use incense in groups
+            try:
+                member = await message.bot.get_chat_member(
+                    message.chat.id, user.telegram_id
+                )
+                is_admin = member.status in ("administrator", "creator")
+            except Exception:
+                is_admin = False
+
+            if not is_admin:
+                await message.answer(
+                    "🔒 Only group admins can use Incense in group chats!\n"
+                    "Use it in my DMs instead — I'll spawn Pokémon just for you."
+                )
+                return
+
+            # Check if group already has active incense
+            from telemon.database.models import Group
+            group_result = await session.execute(
+                select(Group).where(Group.chat_id == message.chat.id)
+            )
+            group = group_result.scalar_one_or_none()
+            if group and group.incense_until and group.incense_until > now:
+                remaining = int((group.incense_until - now).total_seconds() / 60)
+                await message.answer(
+                    f"🕐 Group Incense is already active! ({remaining} min remaining)"
+                )
+                return
+
+            # Activate group incense
+            if group:
+                group.incense_until = now + timedelta(hours=1)
+                group.incense_activated_by = user.telegram_id
+            inventory_item.quantity -= 1
+            await session.commit()
+
+            await message.answer(
+                "🟢 <b>Group Incense Activated!</b>\n\n"
+                f"Activated by {user.display_name}\n"
+                "Pokémon will spawn <b>twice as often</b> in this group for 1 hour!\n\n"
+                f"<i>Incense remaining: {inventory_item.quantity}</i>"
+            )
+        else:
+            # DM mode — check if already active
+            if user.incense_until and user.incense_until > now:
+                remaining = int((user.incense_until - now).total_seconds() / 60)
+                await message.answer(
+                    f"🕐 Your Incense is already active! ({remaining} min remaining)"
+                )
+                return
+
+            # Activate personal incense
+            user.incense_until = now + timedelta(hours=1)
+            inventory_item.quantity -= 1
+            await session.commit()
+
+            await message.answer(
+                "🟢 <b>Incense Activated!</b>\n\n"
+                "Pokémon will spawn in your DMs for 1 hour!\n"
+                "Stay ready with /catch when they appear.\n\n"
+                f"<i>Incense remaining: {inventory_item.quantity}</i>"
+            )
+
+        logger.info(
+            "Incense activated",
+            user_id=user.telegram_id,
+            mode="group" if is_group else "dm",
+            chat_id=message.chat.id,
         )
         return
 
     # ── XP Boost ──
-    if item_id == 203:
+    if item_id == XP_BOOST_ID:
+        from datetime import timedelta
+
+        now = datetime.utcnow()
+
+        # Check if already active
+        if user.xp_boost_until and user.xp_boost_until > now:
+            remaining = int((user.xp_boost_until - now).total_seconds() / 60)
+            await message.answer(
+                f"🕐 Your XP Boost is already active! ({remaining} min remaining)"
+            )
+            return
+
+        # Activate XP boost
+        user.xp_boost_until = now + timedelta(hours=1)
+        inventory_item.quantity -= 1
+        await session.commit()
+
         await message.answer(
-            "<b>XP Boost</b>\n\n"
-            "XP Boost feature coming soon!\n"
-            "When activated, you'll earn 2x XP for 1 hour."
+            "🟢 <b>XP Boost Activated!</b>\n\n"
+            "You'll earn <b>2× XP</b> from catches and battles for 1 hour!\n\n"
+            f"<i>XP Boosts remaining: {inventory_item.quantity}</i>"
         )
+
+        logger.info("XP Boost activated", user_id=user.telegram_id)
         return
 
     # ── Battle items ──

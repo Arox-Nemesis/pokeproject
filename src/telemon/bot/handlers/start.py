@@ -63,12 +63,12 @@ def get_starter_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Bulbasaur", callback_data="starter:bulbasaur"),
-                InlineKeyboardButton(text="Charmander", callback_data="starter:charmander"),
+                InlineKeyboardButton(text="Bulbasaur", callback_data="starter:bulbasaur", style="success"),
+                InlineKeyboardButton(text="Charmander", callback_data="starter:charmander", style="success"),
             ],
             [
-                InlineKeyboardButton(text="Squirtle", callback_data="starter:squirtle"),
-                InlineKeyboardButton(text="Pikachu", callback_data="starter:pikachu"),
+                InlineKeyboardButton(text="Squirtle", callback_data="starter:squirtle", style="success"),
+                InlineKeyboardButton(text="Pikachu", callback_data="starter:pikachu", style="success"),
             ],
         ]
     )

@@ -437,7 +437,9 @@ def build_leaderboard_keyboard(
     for label, lb_type in categories:
         if lb_type == current_type:
             label = f"[{label}]"
-        builder.button(text=label, callback_data=f"lb:{lb_type.value}:1")
+            builder.button(text=label, callback_data=f"lb:{lb_type.value}:1")
+        else:
+            builder.button(text=label, callback_data=f"lb:{lb_type.value}:1", style="primary")
     
     # Pagination row
     if total_pages > 1:

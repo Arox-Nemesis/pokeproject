@@ -35,6 +35,7 @@ from telemon.core.forms import (
 )
 from telemon.core.leveling import (
     add_xp_to_pokemon,
+    apply_xp_boost,
     calculate_wild_battle_xp,
     calculate_npc_battle_xp,
     format_xp_message,
@@ -126,9 +127,9 @@ def build_move_keyboard(battle: Battle, user_id: int) -> InlineKeyboardBuilder:
     for i, move in enumerate(moves):
         # Show move name and type
         move_text = f"{move['name']} ({move['type'].title()})"
-        builder.button(text=move_text, callback_data=f"battle:move:{battle.id}:{i}")
+        builder.button(text=move_text, callback_data=f"battle:move:{battle.id}:{i}", style="primary")
     
-    builder.button(text="Forfeit", callback_data=f"battle:forfeit:{battle.id}")
+    builder.button(text="Forfeit", callback_data=f"battle:forfeit:{battle.id}", style="danger")
     builder.adjust(2)
     
     return builder
@@ -273,8 +274,8 @@ async def cmd_duel(message: Message, session: AsyncSession, user: User) -> None:
     
     # Build accept/decline keyboard
     builder = InlineKeyboardBuilder()
-    builder.button(text="Accept", callback_data=f"battle:accept:{battle.id}")
-    builder.button(text="Decline", callback_data=f"battle:decline:{battle.id}")
+    builder.button(text="Accept", callback_data=f"battle:accept:{battle.id}", style="success")
+    builder.button(text="Decline", callback_data=f"battle:decline:{battle.id}", style="danger")
     builder.adjust(2)
     
     target_name = target_user.username or f"User {target_user.telegram_id}"
@@ -643,14 +644,14 @@ def build_pve_move_keyboard(state: dict, user_id: int) -> InlineKeyboardBuilder:
 
     for i, move in enumerate(state["player"]["moves"]):
         move_text = f"{move['name']} ({move['type'].title()})"
-        builder.button(text=move_text, callback_data=f"pve:move:{user_id}:{i}")
+        builder.button(text=move_text, callback_data=f"pve:move:{user_id}:{i}", style="primary")
 
     # Show Mega Evolve button if eligible and not yet used
     if state.get("mega_form") and not state.get("mega_used"):
         mega_name = state["mega_form"]["form_name"]
-        builder.button(text=f"Mega Evolve", callback_data=f"pve:mega:{user_id}")
+        builder.button(text=f"Mega Evolve", callback_data=f"pve:mega:{user_id}", style="success")
 
-    builder.button(text="Flee", callback_data=f"pve:flee:{user_id}")
+    builder.button(text="Flee", callback_data=f"pve:flee:{user_id}", style="danger")
     builder.adjust(2)
 
     return builder
@@ -1109,6 +1110,7 @@ async def _handle_pve_win(
         xp_reward = calculate_npc_battle_xp(player_level, enemy_level, multiplier)
     else:
         xp_reward = calculate_wild_battle_xp(player_level, enemy_level)
+    xp_reward = apply_xp_boost(xp_reward, user.xp_boost_until)
     coin_reward = state["coin_reward_base"]
 
     # Apply rewards

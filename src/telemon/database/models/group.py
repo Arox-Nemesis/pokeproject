@@ -54,6 +54,10 @@ class Group(Base, TimestampMixin):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     ban_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Group incense (activated by admin)
+    incense_until: Mapped[datetime | None] = mapped_column(nullable=True)
+    incense_activated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
     def __repr__(self) -> str:
         return f"<Group {self.chat_id} {self.title}>"
 

@@ -192,8 +192,12 @@ async def check_spawn_trigger(session: AsyncSession, chat_id: int) -> bool:
     if active_spawn:
         return False
 
-    # Check message threshold
-    if group.message_count >= group.spawn_threshold:
+    # Check message threshold (group incense halves threshold)
+    effective_threshold = group.spawn_threshold
+    if group.incense_until and group.incense_until > datetime.utcnow():
+        effective_threshold = max(1, effective_threshold // 2)
+
+    if group.message_count >= effective_threshold:
         # Reset counter now so that if the caller's spawn fails,
         # we don't re-trigger on every subsequent message.
         group.message_count = 0

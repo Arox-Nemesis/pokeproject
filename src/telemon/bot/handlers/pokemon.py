@@ -577,8 +577,8 @@ async def cmd_release(message: Message, session: AsyncSession, user: User) -> No
 
     # Build confirmation keyboard
     builder = InlineKeyboardBuilder()
-    builder.button(text="Yes, release", callback_data=f"release:confirm:{poke.id}")
-    builder.button(text="Cancel", callback_data="release:cancel")
+    builder.button(text='Yes, release', callback_data=f'release:confirm:{poke.id}', style='danger')
+    builder.button(text='Cancel', callback_data='release:cancel')
     builder.adjust(2)
 
     await message.answer(
@@ -989,8 +989,8 @@ async def release_duplicates(
     # Build confirmation
     builder = InlineKeyboardBuilder()
     count = len(to_release)
-    builder.button(text=f"Yes, release {count} Pokemon", callback_data=f"bulkrel:dups:{count}")
-    builder.button(text="Cancel", callback_data="bulkrel:cancel")
+    builder.button(text=f'Yes, release {count} Pokemon', callback_data=f'bulkrel:dups:{count}', style='danger')
+    builder.button(text='Cancel', callback_data='bulkrel:cancel')
     builder.adjust(1)
 
     # Store release IDs in memory for the callback
@@ -1080,8 +1080,8 @@ async def release_filtered(
 
     count = len(to_release)
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"Yes, release {count} Pokemon", callback_data=f"bulkrel:filt:{count}")
-    builder.button(text="Cancel", callback_data="bulkrel:cancel")
+    builder.button(text=f'Yes, release {count} Pokemon', callback_data=f'bulkrel:filt:{count}', style='danger')
+    builder.button(text='Cancel', callback_data='bulkrel:cancel')
     builder.adjust(1)
 
     _pending_bulk_releases[user.telegram_id] = [str(p.id) for p in to_release]

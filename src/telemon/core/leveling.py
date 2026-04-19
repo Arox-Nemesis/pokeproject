@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +11,13 @@ from telemon.core.constants import MAX_LEVEL
 from telemon.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def apply_xp_boost(xp: int, boost_until: datetime | None) -> int:
+    """Double XP if the user has an active XP Boost."""
+    if boost_until and boost_until > datetime.utcnow():
+        return xp * 2
+    return xp
 
 
 def xp_for_next_level(level: int) -> int:

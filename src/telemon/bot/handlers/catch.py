@@ -263,9 +263,10 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
 
             # XP from catching
             if sel_poke and sel_poke.level < MAX_LEVEL:
-                from telemon.core.leveling import calculate_catch_xp, add_xp_to_pokemon, format_xp_message
+                from telemon.core.leveling import calculate_catch_xp, add_xp_to_pokemon, format_xp_message, apply_xp_boost
 
                 catch_xp = calculate_catch_xp(new_pokemon.level, spawn.species.catch_rate)
+                catch_xp = apply_xp_boost(catch_xp, user.xp_boost_until)
                 xp_added, levels_gained, learned_moves = await add_xp_to_pokemon(
                     session, str(sel_poke.id), catch_xp
                 )

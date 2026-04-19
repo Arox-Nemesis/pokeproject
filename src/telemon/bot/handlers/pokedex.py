@@ -363,7 +363,8 @@ def build_pokedex_keyboard(
 
     for text, ftype in filter_buttons:
         display = f"[{text}]" if filter_type == ftype else text
-        builder.button(text=display, callback_data=f"dex:filter:{ftype}:1:{gen_str}")
+        style = None if filter_type == ftype else "primary"
+        builder.button(text=display, callback_data=f"dex:filter:{ftype}:1:{gen_str}", style=style)
 
     builder.adjust(3, 4)  # 3 nav buttons, 4 filter buttons
 
@@ -785,6 +786,7 @@ def _entry_nav_keyboard(
             builder.button(
                 text=label,
                 callback_data=f"dexentry:{species_id}:{page_key}",
+                style="primary",
             )
     builder.adjust(len(pages))
     return builder
