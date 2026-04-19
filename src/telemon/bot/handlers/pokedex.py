@@ -683,7 +683,8 @@ async def _build_evolution_chain_text(
         else:
             return f"<b>Evolution:</b> {base_name} → {len(branch_ends)} forms"
 
-    except Exception:
+    except Exception as e:
+        logger.debug("Evolution chain parse failed", error=str(e))
         return "<b>Evolution:</b> —"
 
 
@@ -737,8 +738,8 @@ async def pokedex_search(
                     reply_markup=keyboard.as_markup() if keyboard else None,
                 )
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Dex image fallback to text", error=str(e))
 
     await message.answer(
         text,
@@ -999,8 +1000,8 @@ async def handle_dexentry_callback(
                 caption=text,
                 reply_markup=keyboard.as_markup() if keyboard else None,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to edit dex entry message", error=str(e))
 
     await callback.answer()
 

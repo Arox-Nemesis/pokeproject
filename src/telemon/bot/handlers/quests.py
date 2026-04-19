@@ -90,8 +90,6 @@ async def cmd_quests(message: Message, session: AsyncSession, user: User) -> Non
         lines.append(f"\n<b>{len(claimable)} quest(s) ready to claim!</b> ({total_reward:,} {CURRENCY_SHORT})")
         lines.append("Use /quest claimall to claim all rewards")
 
-    lines.append(f"\n<i>Quests auto-generate. Complete tasks to earn {CURRENCY_SHORT}!</i>")
-
     await message.answer("\n".join(lines))
 
 

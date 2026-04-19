@@ -486,8 +486,8 @@ async def callback_execute_move(
                 xp_added, new_lvl, leveled = await add_team_xp(session, winner.team_id, "battle_win")
                 if leveled:
                     lines.append(f"\nYour team leveled up to Lv.{new_lvl}!")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Team XP award failed on PvP battle win", error=str(e))
 
         winner_name = winner.username or f"User {winner.telegram_id}"
         
@@ -1159,8 +1159,8 @@ async def _handle_pve_win(
             xp_added, new_lvl, leveled = await add_team_xp(session, user.team_id, "battle_win")
             if leveled:
                 lines.append(f"\nYour team leveled up to Lv.{new_lvl}!")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Team XP award failed on PvE battle win", error=str(e))
 
     # Clean up
     del _pve_battles[user.telegram_id]

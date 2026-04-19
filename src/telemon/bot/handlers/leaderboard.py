@@ -70,17 +70,23 @@ async def get_catches_leaderboard(
     )
     rows = result.all()
     
-    # Get user details
+    # Batch-fetch user details (fixes N+1 query)
+    user_ids = [uid for uid, _ in rows]
+    user_map: dict[int, str] = {}
+    if user_ids:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id.in_(user_ids))
+        )
+        user_map = {
+            u.telegram_id: u.display_name for u in user_result.scalars().all()
+        }
+    
     entries = []
     for i, (user_id, total) in enumerate(rows):
-        user_result = await session.execute(
-            select(User).where(User.telegram_id == user_id)
-        )
-        user = user_result.scalar_one_or_none()
         entries.append({
             "rank": offset + i + 1,
             "user_id": user_id,
-            "username": user.display_name if user else f"User {user_id}",
+            "username": user_map.get(user_id, f"User {user_id}"),
             "value": total,
             "label": "Pokemon",
         })
@@ -151,16 +157,23 @@ async def get_pokedex_leaderboard(
     )
     rows = result.all()
     
+    # Batch-fetch user details (fixes N+1 query)
+    user_ids = [uid for uid, _ in rows]
+    user_map: dict[int, str] = {}
+    if user_ids:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id.in_(user_ids))
+        )
+        user_map = {
+            u.telegram_id: u.display_name for u in user_result.scalars().all()
+        }
+    
     entries = []
     for i, (user_id, total) in enumerate(rows):
-        user_result = await session.execute(
-            select(User).where(User.telegram_id == user_id)
-        )
-        user = user_result.scalar_one_or_none()
         entries.append({
             "rank": offset + i + 1,
             "user_id": user_id,
-            "username": user.display_name if user else f"User {user_id}",
+            "username": user_map.get(user_id, f"User {user_id}"),
             "value": total,
             "label": "species",
         })
@@ -197,16 +210,23 @@ async def get_shiny_leaderboard(
     )
     rows = result.all()
     
+    # Batch-fetch user details (fixes N+1 query)
+    user_ids = [uid for uid, _ in rows]
+    user_map: dict[int, str] = {}
+    if user_ids:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id.in_(user_ids))
+        )
+        user_map = {
+            u.telegram_id: u.display_name for u in user_result.scalars().all()
+        }
+    
     entries = []
     for i, (user_id, total) in enumerate(rows):
-        user_result = await session.execute(
-            select(User).where(User.telegram_id == user_id)
-        )
-        user = user_result.scalar_one_or_none()
         entries.append({
             "rank": offset + i + 1,
             "user_id": user_id,
-            "username": user.display_name if user else f"User {user_id}",
+            "username": user_map.get(user_id, f"User {user_id}"),
             "value": total,
             "label": "shinies ✨",
         })
@@ -313,16 +333,23 @@ async def get_group_leaderboard(
     )
     rows = result.all()
     
+    # Batch-fetch user details (fixes N+1 query)
+    user_ids = [uid for uid, _ in rows]
+    user_map: dict[int, str] = {}
+    if user_ids:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id.in_(user_ids))
+        )
+        user_map = {
+            u.telegram_id: u.display_name for u in user_result.scalars().all()
+        }
+    
     entries = []
     for i, (user_id, total) in enumerate(rows):
-        user_result = await session.execute(
-            select(User).where(User.telegram_id == user_id)
-        )
-        user = user_result.scalar_one_or_none()
         entries.append({
             "rank": offset + i + 1,
             "user_id": user_id,
-            "username": user.display_name if user else f"User {user_id}",
+            "username": user_map.get(user_id, f"User {user_id}"),
             "value": total,
             "label": "catches here",
         })
@@ -449,8 +476,7 @@ def format_leaderboard(
         rank_display = get_rank_display(entry["rank"])
         value_display = f"{entry['value']:,}" if isinstance(entry["value"], int) else entry["value"]
         lines.append(
-            f"{rank_display} <b>{entry['username']}</b>\n"
-            f"     {value_display} {entry['label']}"
+            f"{rank_display} <b>{entry['username']}</b> — {value_display} {entry['label']}"
         )
     
     return "\n".join(lines)

@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.core.evolution import check_evolution, evolve_pokemon, get_possible_evolutions
@@ -34,6 +34,7 @@ PET_COOLDOWN_SECONDS = 1800  # 30 minutes cooldown between /pet uses
 
 # In-memory cooldown tracking for /pet
 _pet_cooldowns: dict[int, datetime] = {}
+_PET_COOLDOWN_MAX_SIZE = 500
 
 # ──────────────────────────────────────────────
 # Shop category data (inline keyboard navigation)
@@ -250,21 +251,28 @@ async def cmd_buy(message: Message, session: AsyncSession, user: User) -> None:
 
     total_cost = item.cost * quantity
 
-    # Check if user has enough balance
-    if user.balance < total_cost:
+    # Atomic balance deduction — prevents race conditions where two concurrent
+    # /buy commands both see sufficient balance and double-spend.
+    result = await session.execute(
+        update(User)
+        .where(User.telegram_id == user.telegram_id)
+        .where(User.balance >= total_cost)
+        .values(balance=User.balance - total_cost)
+    )
+
+    if result.rowcount == 0:
         await message.answer(
             f"Not enough {CURRENCY_SHORT}!\n\n"
             f"Item: {item.name} (ID: {item.id})\n"
             f"Price: {item.cost:,} {CURRENCY_SHORT} x {quantity} = {total_cost:,} {CURRENCY_SHORT}\n"
-            f"Your balance: {user.balance:,} {CURRENCY_SHORT}\n"
-            f"You need: {total_cost - user.balance:,} more {CURRENCY_SHORT}"
+            f"Your balance: {user.balance:,} {CURRENCY_SHORT}"
         )
         return
 
-    # Process purchase
-    user.balance -= total_cost
+    # Refresh the user object so balance is up-to-date for the response
+    await session.refresh(user)
 
-    # Add to inventory
+    # Add to inventory (atomic upsert)
     inv_result = await session.execute(
         select(InventoryItem)
         .where(InventoryItem.user_id == user.telegram_id)
@@ -529,6 +537,10 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
         # Calculate how many can actually be used
         levels_available = MAX_LEVEL - poke.level  # room to grow
+        if levels_available <= 0:
+            await message.answer(f"{poke.display_name} is already at max level ({MAX_LEVEL})!")
+            return
+
         max_usable = min(inventory_item.quantity, levels_available)
         amount = min(use_qty, max_usable)
 
@@ -750,9 +762,32 @@ async def cmd_sell(message: Message, session: AsyncSession, user: User) -> None:
         return
 
     total_earnings = item.sell_price * sell_qty
-    inventory_item.quantity -= sell_qty
-    user.balance += total_earnings
+
+    # Atomic inventory deduction — prevents double-selling race conditions
+    inv_update = await session.execute(
+        update(InventoryItem)
+        .where(InventoryItem.user_id == user.telegram_id)
+        .where(InventoryItem.item_id == item_id)
+        .where(InventoryItem.quantity >= sell_qty)
+        .values(quantity=InventoryItem.quantity - sell_qty)
+    )
+
+    if inv_update.rowcount == 0:
+        await message.answer("Not enough items to sell (concurrent operation detected).")
+        return
+
+    # Atomic balance credit
+    await session.execute(
+        update(User)
+        .where(User.telegram_id == user.telegram_id)
+        .values(balance=User.balance + total_earnings)
+    )
+
     await session.commit()
+
+    # Refresh for accurate response values
+    await session.refresh(user)
+    await session.refresh(inventory_item)
 
     logger.info(
         "User sold item",
@@ -785,6 +820,14 @@ async def cmd_pet(message: Message, session: AsyncSession, user: User) -> None:
             return
 
     _pet_cooldowns[user.telegram_id] = now
+
+    # Prune expired cooldown entries to prevent memory leaks
+    if len(_pet_cooldowns) > _PET_COOLDOWN_MAX_SIZE:
+        from datetime import timedelta
+        cutoff = now - timedelta(seconds=PET_COOLDOWN_SECONDS)
+        expired = [uid for uid, ts in _pet_cooldowns.items() if ts < cutoff]
+        for uid in expired:
+            del _pet_cooldowns[uid]
 
     text = message.text or ""
     args = text.split()

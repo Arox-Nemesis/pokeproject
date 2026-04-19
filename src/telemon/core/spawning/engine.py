@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.expression import func
 
 from telemon.config import settings
 from telemon.database.models import ActiveSpawn, Group, PokemonSpecies
@@ -59,18 +60,19 @@ async def get_random_species(session: AsyncSession) -> PokemonSpecies | None:
     else:  # common
         query = query.where(PokemonSpecies.catch_rate > 120)
 
+    # Let the database handle randomization — avoids loading all rows into memory
+    query = query.order_by(func.random()).limit(1)
     result = await session.execute(query)
-    species_list = result.scalars().all()
+    species = result.scalar_one_or_none()
 
-    if not species_list:
-        # Fallback to any Pokemon
-        result = await session.execute(select(PokemonSpecies))
-        species_list = result.scalars().all()
+    if species is None:
+        # Fallback: any random Pokemon
+        fallback = await session.execute(
+            select(PokemonSpecies).order_by(func.random()).limit(1)
+        )
+        species = fallback.scalar_one_or_none()
 
-    if not species_list:
-        return None
-
-    return random.choice(species_list)
+    return species
 
 
 def should_be_shiny(chain_bonus: int = 0) -> bool:
@@ -140,11 +142,16 @@ async def create_spawn(
     group = result.scalar_one_or_none()
 
     if group:
-        group.total_spawns += 1
-        group.last_spawn_at = datetime.utcnow()
         group.message_count = 0
+        # Randomize next spawn threshold so users can't predict exact count
+        group.spawn_threshold = random.randint(
+            settings.spawn_threshold_min, settings.spawn_threshold_max
+        )
+        # Note: group.total_spawns and group.last_spawn_at are updated by
+        # the caller only AFTER confirming the spawn message was delivered.
 
-    await session.commit()
+    # Flush but don't commit — caller controls the transaction
+    await session.flush()
 
     logger.info(
         "Created spawn",
@@ -187,6 +194,10 @@ async def check_spawn_trigger(session: AsyncSession, chat_id: int) -> bool:
 
     # Check message threshold
     if group.message_count >= group.spawn_threshold:
+        # Reset counter now so that if the caller's spawn fails,
+        # we don't re-trigger on every subsequent message.
+        group.message_count = 0
+        await session.flush()
         return True
 
     # Check time-based spawn (if enough time has passed and some activity)

@@ -19,9 +19,9 @@ router = Router(name="catch")
 logger = get_logger(__name__)
 
 # Track last hint time per user per chat (simple in-memory cache)
-# In production, use Redis for this
 _hint_cooldowns: dict[tuple[int, int], datetime] = {}
 HINT_COOLDOWN_SECONDS = 10
+_HINT_COOLDOWN_MAX_SIZE = 500
 
 
 def generate_hint(name: str, hints_used: int) -> str:
@@ -156,7 +156,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
         pokedex_entry.times_caught += 1
         if spawn.is_shiny:
             pokedex_entry.caught_shiny = True
-        
+
         # Milestone bonuses
         catches = pokedex_entry.times_caught
         if catches == 10:
@@ -181,75 +181,17 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
 
     # Add pokedex bonus to reward
     reward += pokedex_bonus
-    user.balance += pokedex_bonus  # Main reward already added above
-
-    # Update group stats
-    group_result = await session.execute(
-        select(Group).where(Group.chat_id == chat_id)
-    )
-    group = group_result.scalar_one_or_none()
-    if group:
-        group.total_catches += 1
-
-    # Update shiny hunt chain
-    chain_msg = ""
-    if user.shiny_hunt_species_id:
-        if user.shiny_hunt_species_id == spawn.species_id:
-            # Correct species - increment chain
-            user.shiny_hunt_chain += 1
-            chain_msg = f"\n🔗 Chain: {user.shiny_hunt_chain}"
-            if spawn.is_shiny:
-                chain_msg += " ✨ SHINY FOUND!"
-        else:
-            # Wrong species - break chain
-            old_chain = user.shiny_hunt_chain
-            if old_chain > 0:
-                user.shiny_hunt_chain = 0
-                chain_msg = f"\n⛓️‍💥 Chain broken! (was {old_chain})"
-
-    # Friendship gain: selected Pokemon gets +1 per catch (Soothe Bell: +2)
-    # Also award XP from catching
-    xp_msg = ""
-    if user.selected_pokemon_id:
-        sel_result = await session.execute(
-            select(Pokemon)
-            .where(Pokemon.id == user.selected_pokemon_id)
-            .where(Pokemon.owner_id == user.telegram_id)
-        )
-        sel_poke = sel_result.scalar_one_or_none()
-        if sel_poke and sel_poke.friendship < MAX_FRIENDSHIP:
-            gain = 1
-            if sel_poke.held_item and sel_poke.held_item.lower() == "soothe bell":
-                gain = 2
-            sel_poke.friendship = min(MAX_FRIENDSHIP, sel_poke.friendship + gain)
-
-        # XP from catching
-        if sel_poke and sel_poke.level < MAX_LEVEL:
-            from telemon.core.leveling import calculate_catch_xp, add_xp_to_pokemon, format_xp_message
-
-            catch_xp = calculate_catch_xp(new_pokemon.level, spawn.species.catch_rate)
-            xp_added, levels_gained, learned_moves = await add_xp_to_pokemon(
-                session, str(sel_poke.id), catch_xp
-            )
-            if xp_added > 0:
-                xp_msg = "\n" + format_xp_message(sel_poke.display_name, xp_added, levels_gained, learned_moves)
+    user.balance += pokedex_bonus
 
     session.add(new_pokemon)
 
     # Assign initial moves based on species learnset
-    # Explicitly set species relationship since it might not be loaded on the new object yet
     new_pokemon.species = spawn.species
-    
-    from telemon.core.moves import assign_starter_moves
 
+    from telemon.core.moves import assign_starter_moves
     await assign_starter_moves(session, new_pokemon)
 
     await session.commit()
-
-    quest_msg = ""
-    chain_msg = ""
-    xp_msg = ""
-    ach_notifications = ""
 
     iv_total = sum(ivs.values())
     iv_percent = iv_percentage(iv_total)
@@ -457,6 +399,13 @@ async def cmd_hint(message: Message, session: AsyncSession, user: User) -> None:
 
     # Update cooldown
     _hint_cooldowns[cooldown_key] = now
+
+    # Prune expired cooldown entries to prevent memory leaks
+    if len(_hint_cooldowns) > _HINT_COOLDOWN_MAX_SIZE:
+        cutoff = now - timedelta(seconds=HINT_COOLDOWN_SECONDS)
+        expired = [k for k, ts in _hint_cooldowns.items() if ts < cutoff]
+        for k in expired:
+            del _hint_cooldowns[k]
 
     # Generate hint
     hint = generate_hint(spawn.species.name, spawn.hints_used)

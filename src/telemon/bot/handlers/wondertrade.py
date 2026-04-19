@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 # Cooldown: 1 wonder trade per 5 minutes per user
 WT_COOLDOWN_SECONDS = 300
 _wt_cooldowns: dict[int, datetime] = {}
+_WT_COOLDOWN_MAX_SIZE = 500
 
 
 async def _get_user_pokemon_by_index(
@@ -138,6 +139,14 @@ async def do_wonder_trade(
             secs = remaining % 60
             await message.answer(f"Wonder Trade cooldown! Wait {mins}m {secs}s.")
             return
+
+    # Prune expired cooldown entries to prevent memory leaks
+    if len(_wt_cooldowns) > _WT_COOLDOWN_MAX_SIZE:
+        from datetime import timedelta
+        cutoff = now - timedelta(seconds=WT_COOLDOWN_SECONDS)
+        expired = [uid for uid, ts in _wt_cooldowns.items() if ts < cutoff]
+        for uid in expired:
+            del _wt_cooldowns[uid]
 
     # Check if user already has a Pokemon in the pool
     existing_result = await session.execute(
@@ -270,8 +279,7 @@ async def do_wonder_trade(
             f"<b>Wonder Trade Complete!</b>\n\n"
             f"<b>Sent:</b> {sprite_sent}{poke.species.name}{shiny_sent} (Lv.{poke.level})\n"
             f"<b>Received:</b> {sprite_recv}{received.species.name}{shiny_recv} (Lv.{received.level})\n"
-            f"IV: {received.iv_percentage:.1f}% | Nature: {received.nature.title()}\n\n"
-            f"<i>The other trainer sent you their {received.species.name}!</i>"
+            f"IV: {received.iv_percentage:.1f}% | Nature: {received.nature.title()}"
             f"{wt_ach_text}"
         )
 
@@ -295,8 +303,8 @@ async def do_wonder_trade(
                 received_iv=poke.iv_percentage,
                 is_shiny=poke.is_shiny,
             )
-        except Exception:
-            pass  # Best-effort DM
+        except Exception as e:
+            logger.warning("Failed to send WT match DM", error=str(e), user_id=old_owner_id)
     else:
         # No match — deposit into pool
         await _deposit_pokemon(session, user, poke, message)
@@ -326,10 +334,9 @@ async def _deposit_pokemon(
     shiny = " ✨" if poke.is_shiny else ""
     sprite = poke_emoji(poke.species.national_dex)
     await message.answer(
-        f"<b>Wonder Trade — Pokemon Deposited!</b>\n\n"
-        f"{sprite}<b>{poke.species.name}</b>{shiny} (Lv.{poke.level}) is now in the pool.\n\n"
-        f"When another trainer deposits a Pokemon, you'll swap instantly!\n"
-        f"<i>Check back with /wt status</i>"
+        f"<b>Wonder Trade — Deposited!</b>\n"
+        f"{sprite}<b>{poke.species.name}</b>{shiny} (Lv.{poke.level}) is now in the pool.\n"
+        f"<i>When another trainer deposits, you'll swap instantly!</i>"
     )
 
     logger.info(

@@ -10,7 +10,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import CURRENCY_SHORT
@@ -845,9 +845,25 @@ async def market_buy(
         await message.answer("❌ Seller not found.")
         return
 
-    # Execute purchase
-    user.balance -= listing.price
-    seller.balance += listing.price
+    # Atomic purchase — debit buyer, credit seller
+    debit_result = await session.execute(
+        update(User)
+        .where(User.telegram_id == user.telegram_id)
+        .where(User.balance >= listing.price)
+        .values(balance=User.balance - listing.price)
+    )
+
+    if debit_result.rowcount == 0:
+        await message.answer(
+            f"❌ Not enough {CURRENCY_SHORT}! Your balance may have changed."
+        )
+        return
+
+    await session.execute(
+        update(User)
+        .where(User.telegram_id == seller.telegram_id)
+        .values(balance=User.balance + listing.price)
+    )
 
     # Transfer Pokemon
     pokemon.owner_id = user.telegram_id
@@ -859,6 +875,9 @@ async def market_buy(
     listing.sold_at = datetime.utcnow()
 
     await session.commit()
+
+    # Refresh for accurate display
+    await session.refresh(user)
 
     logger.info(
         "Market purchase completed",
@@ -891,8 +910,8 @@ async def market_buy(
             price=listing.price,
             buyer_name=user.display_name,
         )
-    except Exception:
-        pass  # DM notification is best-effort
+    except Exception as e:
+        logger.warning("Market sale DM notification failed", error=str(e), seller_id=seller.telegram_id)
 
 
 async def market_cancel(

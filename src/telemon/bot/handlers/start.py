@@ -36,25 +36,16 @@ A Pokemon-style game right here on Telegram!
 
 WELCOME_MESSAGE = f"""
 <b>Welcome to {BOT_NAME}!</b>
-
 A Pokemon-style game right here on Telegram!
 
 <b>What can you do?</b>
-- Catch wild Pokemon that spawn in group chats
-- Build your collection and train them
-- Battle other trainers in PvP duels
-- Trade Pokemon and items with friends
-- Buy and sell on the global market
+• Catch wild Pokemon in group chats
+• Train, battle, trade, and collect
+• Buy and sell on the global market
 
-<b>Quick Start:</b>
-1. Add me to a group chat
-2. Chat with friends - Pokemon will spawn!
-3. Use /catch &lt;name&gt; to catch them
-4. Use /pokemon to see your collection
+<b>Quick Start:</b> Add me to a group → Chat → Pokemon spawn → /catch &lt;name&gt;
 
-<b>Need help?</b> Use /help to see all commands.
-
-<i>Good luck, Trainer!</i>
+Use /help to see all commands.
 """
 
 RETURNING_MESSAGE = f"""
@@ -203,14 +194,10 @@ async def callback_starter_selection(
         # Edit the original message
         await callback.message.edit_text(
             f"<b>Congratulations, {user.display_name}!</b>\n\n"
-            f"You chose <b>{species.name}</b> as your starter Pokemon!\n\n"
-            f"Level: 5\n"
-            f"IVs: {iv_percent}%\n"
-            f"Nature: {nature.capitalize()}\n"
-            f"Ability: {ability}\n"
-            f"Gender: {gender or 'Unknown'}\n\n"
-            f"<i>Your journey begins now! Add me to a group chat to start catching more Pokemon!</i>\n\n"
-            f"Use /help to see all available commands."
+            f"You chose <b>{species.name}</b> as your starter!\n"
+            f"Lv.5 | IV: {iv_percent}% | {nature.capitalize()} | {ability} | {gender or 'Unknown'}\n\n"
+            f"<i>Add me to a group chat to start catching more Pokemon!</i>\n"
+            f"Use /help for all commands."
         )
 
         await callback.answer(f"You chose {species.name}!")

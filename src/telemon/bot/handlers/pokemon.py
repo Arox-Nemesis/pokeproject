@@ -432,8 +432,8 @@ SpA: {poke.iv_sp_attack} | SpD: {poke.iv_sp_defense} | Spe: {poke.iv_speed}
             )
             await message.answer_photo(photo=photo, caption=info)
             return
-    except Exception:
-        pass  # Fall back to text-only
+    except Exception as e:
+        logger.debug("Image fallback to text", error=str(e))  # Best-effort
 
     await message.answer(info)
 
@@ -881,8 +881,8 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
                     xp_added, new_lvl, leveled = await add_team_xp(session, user.team_id, "evolve")
                     if leveled:
                         team_lvl_text = f"\nYour team leveled up to Lv.{new_lvl}!"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Team XP award failed on evolve", error=str(e))
 
             evo_sprite = poke_emoji(poke.species.national_dex)
             await message.answer(

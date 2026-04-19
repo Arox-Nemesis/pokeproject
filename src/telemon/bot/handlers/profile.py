@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import settings, CURRENCY_NAME, CURRENCY_SHORT
@@ -60,17 +60,12 @@ async def cmd_profile(message: Message, session: AsyncSession, user: User) -> No
         f"<b>Name:</b> {user.display_name}\n"
         f"<b>Balance:</b> {user.balance:,} {CURRENCY_NAME}\n\n"
         f"<b>Pokemon Stats</b>\n"
-        f"  Total Caught: {pokemon_count}\n"
-        f"  Unique Species: {unique_caught}\n"
-        f"  Shinies: {shiny_count}\n\n"
+        f"  Total: {pokemon_count} | Unique: {unique_caught} | Shinies: {shiny_count}\n\n"
         f"<b>Battle Stats</b>\n"
-        f"  Wins: {user.battle_wins}\n"
-        f"  Losses: {user.battle_losses}\n"
-        f"  Win Rate: {user.win_rate:.1f}%\n"
-        f"  Rating: {user.battle_rating}\n\n"
-        f"<b>Selected Pokemon:</b> {selected_text}\n"
-        f"<b>Daily Streak:</b> {user.daily_streak} days\n\n"
-        f"<i>Trainer since {user.created_at.strftime('%B %d, %Y')}</i>"
+        f"  {user.battle_wins}W/{user.battle_losses}L ({user.win_rate:.1f}%) | Rating: {user.battle_rating}\n\n"
+        f"<b>Selected:</b> {selected_text}\n"
+        f"<b>Streak:</b> {user.daily_streak} days\n"
+        f"<i>Trainer since {user.created_at.strftime('%b %d, %Y')}</i>"
     )
     await message.answer(profile_text)
 
@@ -170,11 +165,8 @@ async def cmd_daily(message: Message, session: AsyncSession, user: User) -> None
         streak_text = f"\nStreak bonus: +{streak_bonus} ({streak} days)"
 
     await message.answer(
-        f"<b>Daily Reward Claimed!</b>\n\n"
-        f"+{base_reward} {CURRENCY_NAME}{streak_text}\n"
-        f"Total: <b>+{total_reward}</b> {CURRENCY_NAME}\n\n"
-        f"New balance: {user.balance:,} {CURRENCY_NAME}\n"
-        f"Current streak: {user.daily_streak} days{friendship_text}{daily_xp_text}{daily_quest_msg}{daily_ach_text}"
+        f"🎁 <b>Daily Claimed!</b> +{base_reward}{streak_text} = <b>{total_reward}</b> {CURRENCY_NAME}\n"
+        f"Bal: {user.balance:,} {CURRENCY_NAME} | Streak: {user.daily_streak} days{friendship_text}{daily_xp_text}{daily_quest_msg}{daily_ach_text}"
     )
 
 
@@ -277,19 +269,32 @@ async def cmd_gift(message: Message, session: AsyncSession, user: User) -> None:
         await message.answer("You can't gift yourself!")
         return
 
-    # Check balance
-    if user.balance < amount:
+    # Atomic transfer — prevents race conditions where concurrent /gift
+    # commands both see sufficient balance and double-spend.
+    result = await session.execute(
+        update(User)
+        .where(User.telegram_id == user.telegram_id)
+        .where(User.balance >= amount)
+        .values(balance=User.balance - amount)
+    )
+
+    if result.rowcount == 0:
         await message.answer(
             f"Not enough {CURRENCY_NAME}!\n"
-            f"Your balance: {user.balance:,} {CURRENCY_SHORT}\n"
-            f"Trying to send: {amount:,} {CURRENCY_SHORT}"
+            f"Your balance: {user.balance:,} {CURRENCY_SHORT}"
         )
         return
 
-    # Transfer
-    user.balance -= amount
-    target_user.balance += amount
+    # Credit the recipient atomically
+    await session.execute(
+        update(User)
+        .where(User.telegram_id == target_user.telegram_id)
+        .values(balance=User.balance + amount)
+    )
     await session.commit()
+
+    # Refresh for accurate display
+    await session.refresh(user)
 
     logger.info(
         "User sent gift",
@@ -299,7 +304,6 @@ async def cmd_gift(message: Message, session: AsyncSession, user: User) -> None:
     )
 
     await message.answer(
-        f"<b>Gift Sent!</b>\n\n"
-        f"You sent <b>{amount:,} {CURRENCY_SHORT}</b> to {target_name}!\n\n"
-        f"Your balance: {user.balance:,} {CURRENCY_SHORT}"
+        f"✅ Sent <b>{amount:,} {CURRENCY_SHORT}</b> to {target_name}!\n"
+        f"Bal: {user.balance:,} {CURRENCY_SHORT}"
     )

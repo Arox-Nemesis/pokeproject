@@ -249,12 +249,9 @@ async def cmd_breed(message: Message, session: AsyncSession) -> None:
     iv_pct = iv_percentage(iv_total)
 
     await message.answer(
-        f"🥚 <b>An egg appeared!</b>{shiny_text}\n\n"
-        f"Species: <b>{species_name}</b>\n"
-        f"IVs: {iv_pct}%\n"
-        f"Steps to hatch: {egg.steps_total}\n\n"
-        f"Send messages in groups to add steps!\n"
-        f"Use <code>/eggs</code> to check progress, <code>/hatch</code> when ready."
+        f"🥚 <b>An egg appeared!</b>{shiny_text}\n"
+        f"Species: <b>{species_name}</b> | IV: {iv_pct}% | Steps: {egg.steps_total}\n"
+        f"<i>Send messages in groups to add steps! Use /eggs to check, /hatch when ready.</i>"
     )
 
 

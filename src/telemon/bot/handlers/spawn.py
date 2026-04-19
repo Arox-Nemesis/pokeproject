@@ -22,6 +22,9 @@ logger = get_logger(__name__)
 _user_cooldowns: dict[int, float] = {}
 _guild_cooldowns: dict[int, float] = {}
 
+# Max entries before pruning expired cooldowns to prevent memory leaks
+_COOLDOWN_MAX_SIZE = 1000
+
 
 def _check_user_cooldown(user_id: int) -> bool:
     """Check if user is on cooldown. Returns True if message should count."""
@@ -45,6 +48,27 @@ def _check_guild_cooldown(guild_id: int) -> bool:
     
     _guild_cooldowns[guild_id] = current
     return True
+
+
+def _prune_cooldowns() -> None:
+    """Remove expired entries from cooldown dicts to prevent memory leaks."""
+    current = time.time()
+
+    if len(_user_cooldowns) > _COOLDOWN_MAX_SIZE:
+        expired = [
+            uid for uid, ts in _user_cooldowns.items()
+            if current - ts > settings.spawn_user_cooldown_seconds
+        ]
+        for uid in expired:
+            del _user_cooldowns[uid]
+
+    if len(_guild_cooldowns) > _COOLDOWN_MAX_SIZE:
+        expired = [
+            gid for gid, ts in _guild_cooldowns.items()
+            if current - ts > settings.spawn_guild_cooldown_seconds
+        ]
+        for gid in expired:
+            del _guild_cooldowns[gid]
 
 
 def _is_valid_message(message: Message) -> bool:
@@ -141,17 +165,24 @@ async def track_group_message(
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else 0
 
+    # Anti-spam: skip anonymous admins entirely (user_id 0)
+    if user_id == 0:
+        return
+
     # Anti-spam: Check if message is valid for counting
     if not _is_valid_message(message):
         return
 
     # Anti-spam: Check user cooldown (1.5 sec between messages counting)
-    if user_id and not _check_user_cooldown(user_id):
+    if not _check_user_cooldown(user_id):
         return
 
     # Anti-spam: Check guild cooldown (1 sec between any messages counting)
     if not _check_guild_cooldown(chat_id):
         return
+
+    # Periodically prune cooldown dicts to prevent memory leaks
+    _prune_cooldowns()
 
     # Get or create group
     result = await session.execute(
@@ -194,10 +225,12 @@ async def track_group_message(
                         f"ready to hatch!\nUse /hatch to hatch {'them' if len(ready_eggs) > 1 else 'it'}!"
                     ),
                 )
-            except Exception:
-                pass  # DM notification is best-effort
-    except Exception:
-        pass  # Don't break spawn tracking if breeding fails
+            except Exception as e:
+                logger.warning("Failed to send egg hatch DM", error=str(e), user_id=user_id)
+    except Exception as e:
+        logger.warning(
+            "Egg step tracking failed", error=str(e), user_id=user_id, chat_id=chat_id
+        )
     
     # Log every 5 messages for debugging (reduce spam)
     if group.message_count % 5 == 0:
@@ -231,6 +264,11 @@ async def track_group_message(
                 msg_id = await send_spawn_message(bot, chat_id, spawn)
                 if msg_id:
                     spawn.message_id = msg_id
+
+                    # Only update spawn stats after confirmed delivery
+                    group.total_spawns += 1
+                    group.last_spawn_at = datetime.utcnow()
+
                     await session.commit()
 
                     logger.info(
@@ -241,5 +279,13 @@ async def track_group_message(
                         rarity="legendary" if species.is_legendary else "mythical" if species.is_mythical else "normal",
                     )
                     return
+                else:
+                    # Message send failed — remove the ghost spawn record
+                    await session.delete(spawn)
+                    logger.warning(
+                        "Spawn message send failed, removing spawn record",
+                        chat_id=chat_id,
+                        species=species.name,
+                    )
 
     await session.commit()

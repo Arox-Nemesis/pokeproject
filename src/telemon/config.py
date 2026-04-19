@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     )
 
     # Spawning Configuration
-    spawn_message_threshold: int = Field(default=24, ge=1, le=1000)
+    spawn_threshold_min: int = Field(default=20, ge=1, le=1000)
+    spawn_threshold_max: int = Field(default=30, ge=1, le=1000)
     spawn_time_min_minutes: int = Field(default=5, ge=1)
     spawn_time_max_minutes: int = Field(default=15, ge=1)
     spawn_timeout_seconds: int = Field(default=300, ge=30)  # 5 minutes
