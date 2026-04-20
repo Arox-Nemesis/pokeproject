@@ -27,12 +27,8 @@ from telemon.core.battle import (
     build_pve_participant_from_species,
     pve_calculate_damage,
 )
-from telemon.core.forms import (
-    can_mega_evolve,
-    can_rayquaza_mega,
-    apply_mega_to_player_participant,
-    MegaForm,
-)
+# Mega evolution is now handled via /mega command (permanent species swap),
+# no longer applied in-battle.
 from telemon.core.leveling import (
     add_xp_to_pokemon,
     apply_xp_boost,
@@ -646,10 +642,7 @@ def build_pve_move_keyboard(state: dict, user_id: int) -> InlineKeyboardBuilder:
         move_text = f"{move['name']} ({move['type'].title()})"
         builder.button(text=move_text, callback_data=f"pve:move:{user_id}:{i}", style="primary")
 
-    # Show Mega Evolve button if eligible and not yet used
-    if state.get("mega_form") and not state.get("mega_used"):
-        mega_name = state["mega_form"]["form_name"]
-        builder.button(text=f"Mega Evolve", callback_data=f"pve:mega:{user_id}", style="success")
+
 
     builder.button(text="Flee", callback_data=f"pve:flee:{user_id}", style="danger")
     builder.adjust(2)
@@ -702,11 +695,7 @@ async def cmd_battle_wild(message: Message, session: AsyncSession, user: User) -
     # Determine who goes first
     player_first = player_part.speed >= enemy_part.speed
 
-    # Check mega evolution eligibility
-    held_lower = (player_poke.held_item or "").lower() if player_poke.held_item else None
-    mega = can_mega_evolve(player_poke.species_id, held_lower)
-    if not mega:
-        mega = can_rayquaza_mega(player_poke.species_id, player_poke.moves)
+
 
     # Store PvE battle state in memory
     state = {
@@ -748,31 +737,7 @@ async def cmd_battle_wild(message: Message, session: AsyncSession, user: User) -
         "mode": "wild",
         "reward_multiplier": 1.0,
         "coin_reward_base": 50 + wild_level * 5,
-        # Mega evolution state
-        "mega_form": {
-            "form_name": mega.form_name,
-            "type1": mega.type1,
-            "type2": mega.type2,
-            "ability": mega.ability,
-            "base_hp": mega.base_hp,
-            "base_attack": mega.base_attack,
-            "base_defense": mega.base_defense,
-            "base_sp_attack": mega.base_sp_attack,
-            "base_sp_defense": mega.base_sp_defense,
-            "base_speed": mega.base_speed,
-        } if mega else None,
-        "mega_used": False,
-        # Store player IVs/EVs for mega stat recomputation
-        "player_ivs": {
-            "hp": player_poke.iv_hp, "atk": player_poke.iv_attack,
-            "def": player_poke.iv_defense, "spa": player_poke.iv_sp_attack,
-            "spd": player_poke.iv_sp_defense, "spe": player_poke.iv_speed,
-        },
-        "player_evs": {
-            "hp": player_poke.ev_hp, "atk": player_poke.ev_attack,
-            "def": player_poke.ev_defense, "spa": player_poke.ev_sp_attack,
-            "spd": player_poke.ev_sp_defense, "spe": player_poke.ev_speed,
-        },
+
     }
 
     _pve_battles[user.telegram_id] = state
@@ -872,11 +837,7 @@ async def cmd_battle_npc(
 
     player_first = player_part.speed >= enemy_part.speed
 
-    # Check mega evolution eligibility
-    held_lower = (player_poke.held_item or "").lower() if player_poke.held_item else None
-    mega = can_mega_evolve(player_poke.species_id, held_lower)
-    if not mega:
-        mega = can_rayquaza_mega(player_poke.species_id, player_poke.moves)
+
 
     state = {
         "player": {
@@ -918,31 +879,7 @@ async def cmd_battle_npc(
         "npc_key": trainer_key,
         "reward_multiplier": trainer_data["reward_multiplier"],
         "coin_reward_base": int((80 + npc_level * 8) * trainer_data["reward_multiplier"]),
-        # Mega evolution state
-        "mega_form": {
-            "form_name": mega.form_name,
-            "type1": mega.type1,
-            "type2": mega.type2,
-            "ability": mega.ability,
-            "base_hp": mega.base_hp,
-            "base_attack": mega.base_attack,
-            "base_defense": mega.base_defense,
-            "base_sp_attack": mega.base_sp_attack,
-            "base_sp_defense": mega.base_sp_defense,
-            "base_speed": mega.base_speed,
-        } if mega else None,
-        "mega_used": False,
-        # Store player IVs/EVs for mega stat recomputation
-        "player_ivs": {
-            "hp": player_poke.iv_hp, "atk": player_poke.iv_attack,
-            "def": player_poke.iv_defense, "spa": player_poke.iv_sp_attack,
-            "spd": player_poke.iv_sp_defense, "spe": player_poke.iv_speed,
-        },
-        "player_evs": {
-            "hp": player_poke.ev_hp, "atk": player_poke.ev_attack,
-            "def": player_poke.ev_defense, "spa": player_poke.ev_sp_attack,
-            "spd": player_poke.ev_sp_defense, "spe": player_poke.ev_speed,
-        },
+
     }
 
     _pve_battles[user.telegram_id] = state
@@ -1226,81 +1163,4 @@ async def callback_pve_flee(
     await callback.answer("Fled!")
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("pve:mega:"))
-async def callback_pve_mega(
-    callback: CallbackQuery, session: AsyncSession, user: User
-) -> None:
-    """Handle Mega Evolution in PvE battle."""
-    if not callback.data:
-        return
 
-    target_user_id = int(callback.data.split(":")[2])
-
-    if user.telegram_id != target_user_id:
-        await callback.answer("This is not your battle!", show_alert=True)
-        return
-
-    state = _pve_battles.get(user.telegram_id)
-    if not state:
-        await callback.answer("No active battle found!", show_alert=True)
-        return
-
-    if state.get("mega_used"):
-        await callback.answer("Already mega evolved this battle!", show_alert=True)
-        return
-
-    mega_data = state.get("mega_form")
-    if not mega_data:
-        await callback.answer("This Pokemon can't mega evolve!", show_alert=True)
-        return
-
-    # Build a MegaForm from stored data
-    mega = MegaForm(
-        species_id=0,  # not needed here
-        species_name="",
-        form_name=mega_data["form_name"],
-        mega_stone=None,
-        mega_stone_display=None,
-        type1=mega_data["type1"],
-        type2=mega_data["type2"],
-        ability=mega_data["ability"],
-        base_hp=mega_data["base_hp"],
-        base_attack=mega_data["base_attack"],
-        base_defense=mega_data["base_defense"],
-        base_sp_attack=mega_data["base_sp_attack"],
-        base_sp_defense=mega_data["base_sp_defense"],
-        base_speed=mega_data["base_speed"],
-    )
-
-    # Apply mega evolution to player stats
-    ivs = state["player_ivs"]
-    evs = state["player_evs"]
-    level = state["player"]["level"]
-
-    apply_mega_to_player_participant(
-        state["player"],
-        mega,
-        level,
-        iv_hp=ivs["hp"], iv_atk=ivs["atk"], iv_def=ivs["def"],
-        iv_spa=ivs["spa"], iv_spd=ivs["spd"], iv_spe=ivs["spe"],
-        ev_hp=evs["hp"], ev_atk=evs["atk"], ev_def=evs["def"],
-        ev_spa=evs["spa"], ev_spd=evs["spd"], ev_spe=evs["spe"],
-    )
-
-    # Mark as used (once per battle)
-    state["mega_used"] = True
-
-    # Recalculate speed priority
-    state["player_first"] = state["player"]["speed"] >= state["enemy"]["speed"]
-
-    # Show updated status
-    status = format_pve_status(state)
-    builder = build_pve_move_keyboard(state, user.telegram_id)
-
-    await callback.message.edit_text(
-        f"<b>{mega.form_name}!</b>\n"
-        f"Your Pokemon mega evolved!\n\n"
-        f"{status}",
-        reply_markup=builder.as_markup(),
-    )
-    await callback.answer(f"Mega Evolved into {mega.form_name}!")

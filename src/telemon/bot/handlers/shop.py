@@ -106,15 +106,45 @@ def _shop_back_keyboard() -> InlineKeyboardBuilder:
     return builder
 
 
-def _build_category_text(key: str) -> str:
-    """Build the item list text for a shop category."""
+SHOP_PAGE_SIZE = 10  # items per page in category view
+
+
+def _build_category_text(key: str, page: int = 0) -> str:
+    """Build the item list text for a shop category (paginated)."""
     cat = SHOP_CATEGORIES[key]
-    lines = [f"<b>{cat['emoji']} {cat['title']}</b>\n"]
-    for item in cat["items"]:
+    items = cat["items"]
+    total = len(items)
+    total_pages = max(1, (total + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * SHOP_PAGE_SIZE
+    end = min(start + SHOP_PAGE_SIZE, total)
+    page_items = items[start:end]
+
+    page_label = f" (Page {page + 1}/{total_pages})" if total_pages > 1 else ""
+    lines = [f"<b>{cat['emoji']} {cat['title']}{page_label}</b>\n"]
+    for item in page_items:
         ie = item_emoji(item["name"])
         lines.append(f"  <code>{item['id']}</code> {ie}{item['name']} — {item['cost']:,} {CURRENCY_SHORT}")
     lines.append(f"\n<i>/buy [id] [qty] to purchase.  /shopinfo [id] for details.</i>")
     return "\n".join(lines)
+
+
+def _shop_category_keyboard(key: str, page: int = 0) -> InlineKeyboardBuilder:
+    """Build keyboard for a category page with pagination + back."""
+    cat = SHOP_CATEGORIES[key]
+    total = len(cat["items"])
+    total_pages = max(1, (total + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
+
+    builder = InlineKeyboardBuilder()
+    if total_pages > 1:
+        if page > 0:
+            builder.button(text="◀️ Prev", callback_data=f"shop:{key}:{page - 1}")
+        if page < total_pages - 1:
+            builder.button(text="▶️ Next", callback_data=f"shop:{key}:{page + 1}")
+    builder.button(text="◀️ Back to shop", callback_data="shop:back")
+    builder.adjust(2)
+    return builder
 
 
 @router.message(Command("shop"))
@@ -126,13 +156,13 @@ async def cmd_shop(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("shop:"))
 async def callback_shop(callback: CallbackQuery) -> None:
-    """Handle shop category selection."""
-    data = (callback.data or "").split(":", 1)
-    if len(data) < 2:
+    """Handle shop category selection and pagination."""
+    parts = (callback.data or "").split(":")
+    if len(parts) < 2:
         await callback.answer()
         return
 
-    key = data[1]
+    key = parts[1]
 
     if key == "back":
         keyboard = _build_shop_keyboard()
@@ -147,9 +177,15 @@ async def callback_shop(callback: CallbackQuery) -> None:
         await callback.answer("Unknown category")
         return
 
-    text = _build_category_text(key)
+    # Parse optional page number (shop:mega:2)
+    page = 0
+    if len(parts) >= 3 and parts[2].isdigit():
+        page = int(parts[2])
+
+    text = _build_category_text(key, page)
+    kb = _shop_category_keyboard(key, page)
     await callback.message.edit_text(
-        text, reply_markup=_shop_back_keyboard().as_markup()
+        text, reply_markup=kb.as_markup()
     )
     await callback.answer()
 

@@ -79,6 +79,7 @@ class MegaForm:
     species_id: int
     species_name: str
     form_name: str
+    mega_dex: int  # PokeAPI form ID (10033-10090)
     mega_stone: str | None
     mega_stone_display: str | None
     type1: str
@@ -154,10 +155,28 @@ def get_all_mega_species() -> list[dict[str, Any]]:
                 "species_id": species_id,
                 "species_name": entry["species_name"],
                 "form_name": entry["form_name"],
+                "mega_dex": entry.get("mega_dex"),
                 "mega_stone": entry.get("mega_stone"),
                 "mega_stone_display": entry.get("mega_stone_display"),
             })
     return result
+
+
+def get_base_species_for_mega_dex(mega_dex: int) -> tuple[int, str | None] | None:
+    """Reverse lookup: mega dex number → (base_species_id, mega_stone_name_lower).
+
+    Returns None if the dex number is not a known mega form.
+    """
+    for entries in _MEGA_BY_SPECIES.values():
+        for entry in entries:
+            if entry.get("mega_dex") == mega_dex:
+                return entry["species_id"], entry.get("mega_stone")
+    return None
+
+
+def get_mega_forms_for_species(species_id: int) -> list[MegaForm]:
+    """Get all MegaForm entries for a base species ID."""
+    return get_mega_forms(species_id)
 
 
 def apply_mega_to_pve_participant(
@@ -246,6 +265,7 @@ def _entry_to_form(entry: dict[str, Any]) -> MegaForm:
         species_id=entry["species_id"],
         species_name=entry["species_name"],
         form_name=entry["form_name"],
+        mega_dex=entry.get("mega_dex", 0),
         mega_stone=entry.get("mega_stone"),
         mega_stone_display=entry.get("mega_stone_display"),
         type1=entry["type1"],

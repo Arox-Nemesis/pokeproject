@@ -14,7 +14,8 @@
       "base_defense": 123,
       "base_sp_attack": 122,
       "base_sp_defense": 120,
-      "base_speed": 80
+      "base_speed": 80,
+      "mega_dex": 10033
     },
     {
       "species_id": 6,
@@ -30,7 +31,8 @@
       "base_defense": 111,
       "base_sp_attack": 130,
       "base_sp_defense": 85,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10034
     },
     {
       "species_id": 6,
@@ -46,7 +48,8 @@
       "base_defense": 78,
       "base_sp_attack": 159,
       "base_sp_defense": 115,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10035
     },
     {
       "species_id": 9,
@@ -62,7 +65,8 @@
       "base_defense": 120,
       "base_sp_attack": 135,
       "base_sp_defense": 115,
-      "base_speed": 78
+      "base_speed": 78,
+      "mega_dex": 10036
     },
     {
       "species_id": 15,
@@ -78,7 +82,8 @@
       "base_defense": 40,
       "base_sp_attack": 15,
       "base_sp_defense": 80,
-      "base_speed": 145
+      "base_speed": 145,
+      "mega_dex": 10090
     },
     {
       "species_id": 18,
@@ -94,7 +99,8 @@
       "base_defense": 80,
       "base_sp_attack": 135,
       "base_sp_defense": 80,
-      "base_speed": 121
+      "base_speed": 121,
+      "mega_dex": 10073
     },
     {
       "species_id": 65,
@@ -110,7 +116,8 @@
       "base_defense": 65,
       "base_sp_attack": 175,
       "base_sp_defense": 105,
-      "base_speed": 150
+      "base_speed": 150,
+      "mega_dex": 10037
     },
     {
       "species_id": 80,
@@ -126,7 +133,8 @@
       "base_defense": 180,
       "base_sp_attack": 130,
       "base_sp_defense": 80,
-      "base_speed": 30
+      "base_speed": 30,
+      "mega_dex": 10071
     },
     {
       "species_id": 94,
@@ -142,7 +150,8 @@
       "base_defense": 80,
       "base_sp_attack": 170,
       "base_sp_defense": 95,
-      "base_speed": 130
+      "base_speed": 130,
+      "mega_dex": 10038
     },
     {
       "species_id": 115,
@@ -158,7 +167,8 @@
       "base_defense": 100,
       "base_sp_attack": 60,
       "base_sp_defense": 100,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10039
     },
     {
       "species_id": 127,
@@ -174,7 +184,8 @@
       "base_defense": 120,
       "base_sp_attack": 65,
       "base_sp_defense": 90,
-      "base_speed": 105
+      "base_speed": 105,
+      "mega_dex": 10040
     },
     {
       "species_id": 130,
@@ -190,7 +201,8 @@
       "base_defense": 109,
       "base_sp_attack": 70,
       "base_sp_defense": 130,
-      "base_speed": 81
+      "base_speed": 81,
+      "mega_dex": 10041
     },
     {
       "species_id": 142,
@@ -206,7 +218,8 @@
       "base_defense": 85,
       "base_sp_attack": 70,
       "base_sp_defense": 95,
-      "base_speed": 150
+      "base_speed": 150,
+      "mega_dex": 10042
     },
     {
       "species_id": 150,
@@ -222,7 +235,8 @@
       "base_defense": 100,
       "base_sp_attack": 154,
       "base_sp_defense": 100,
-      "base_speed": 130
+      "base_speed": 130,
+      "mega_dex": 10043
     },
     {
       "species_id": 150,
@@ -238,7 +252,8 @@
       "base_defense": 70,
       "base_sp_attack": 194,
       "base_sp_defense": 120,
-      "base_speed": 140
+      "base_speed": 140,
+      "mega_dex": 10044
     },
     {
       "species_id": 181,
@@ -254,7 +269,8 @@
       "base_defense": 105,
       "base_sp_attack": 165,
       "base_sp_defense": 110,
-      "base_speed": 45
+      "base_speed": 45,
+      "mega_dex": 10045
     },
     {
       "species_id": 208,
@@ -270,7 +286,8 @@
       "base_defense": 230,
       "base_sp_attack": 55,
       "base_sp_defense": 95,
-      "base_speed": 30
+      "base_speed": 30,
+      "mega_dex": 10072
     },
     {
       "species_id": 212,
@@ -286,7 +303,8 @@
       "base_defense": 140,
       "base_sp_attack": 65,
       "base_sp_defense": 100,
-      "base_speed": 75
+      "base_speed": 75,
+      "mega_dex": 10046
     },
     {
       "species_id": 214,
@@ -302,7 +320,8 @@
       "base_defense": 115,
       "base_sp_attack": 40,
       "base_sp_defense": 105,
-      "base_speed": 75
+      "base_speed": 75,
+      "mega_dex": 10047
     },
     {
       "species_id": 229,
@@ -318,7 +337,8 @@
       "base_defense": 90,
       "base_sp_attack": 140,
       "base_sp_defense": 90,
-      "base_speed": 115
+      "base_speed": 115,
+      "mega_dex": 10048
     },
     {
       "species_id": 248,
@@ -334,7 +354,8 @@
       "base_defense": 150,
       "base_sp_attack": 95,
       "base_sp_defense": 120,
-      "base_speed": 71
+      "base_speed": 71,
+      "mega_dex": 10049
     },
     {
       "species_id": 254,
@@ -350,7 +371,8 @@
       "base_defense": 75,
       "base_sp_attack": 145,
       "base_sp_defense": 85,
-      "base_speed": 145
+      "base_speed": 145,
+      "mega_dex": 10065
     },
     {
       "species_id": 257,
@@ -366,7 +388,8 @@
       "base_defense": 80,
       "base_sp_attack": 130,
       "base_sp_defense": 80,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10050
     },
     {
       "species_id": 260,
@@ -382,7 +405,8 @@
       "base_defense": 110,
       "base_sp_attack": 95,
       "base_sp_defense": 110,
-      "base_speed": 70
+      "base_speed": 70,
+      "mega_dex": 10064
     },
     {
       "species_id": 282,
@@ -398,7 +422,8 @@
       "base_defense": 65,
       "base_sp_attack": 165,
       "base_sp_defense": 135,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10051
     },
     {
       "species_id": 302,
@@ -414,7 +439,8 @@
       "base_defense": 125,
       "base_sp_attack": 85,
       "base_sp_defense": 115,
-      "base_speed": 20
+      "base_speed": 20,
+      "mega_dex": 10066
     },
     {
       "species_id": 303,
@@ -430,7 +456,8 @@
       "base_defense": 125,
       "base_sp_attack": 55,
       "base_sp_defense": 95,
-      "base_speed": 50
+      "base_speed": 50,
+      "mega_dex": 10052
     },
     {
       "species_id": 306,
@@ -446,7 +473,8 @@
       "base_defense": 230,
       "base_sp_attack": 60,
       "base_sp_defense": 80,
-      "base_speed": 50
+      "base_speed": 50,
+      "mega_dex": 10053
     },
     {
       "species_id": 308,
@@ -462,7 +490,8 @@
       "base_defense": 85,
       "base_sp_attack": 80,
       "base_sp_defense": 85,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10054
     },
     {
       "species_id": 310,
@@ -478,7 +507,8 @@
       "base_defense": 80,
       "base_sp_attack": 135,
       "base_sp_defense": 80,
-      "base_speed": 135
+      "base_speed": 135,
+      "mega_dex": 10055
     },
     {
       "species_id": 319,
@@ -494,7 +524,8 @@
       "base_defense": 70,
       "base_sp_attack": 110,
       "base_sp_defense": 65,
-      "base_speed": 105
+      "base_speed": 105,
+      "mega_dex": 10070
     },
     {
       "species_id": 323,
@@ -510,7 +541,8 @@
       "base_defense": 100,
       "base_sp_attack": 145,
       "base_sp_defense": 105,
-      "base_speed": 20
+      "base_speed": 20,
+      "mega_dex": 10087
     },
     {
       "species_id": 334,
@@ -526,7 +558,8 @@
       "base_defense": 110,
       "base_sp_attack": 110,
       "base_sp_defense": 105,
-      "base_speed": 80
+      "base_speed": 80,
+      "mega_dex": 10067
     },
     {
       "species_id": 354,
@@ -542,7 +575,8 @@
       "base_defense": 75,
       "base_sp_attack": 93,
       "base_sp_defense": 83,
-      "base_speed": 75
+      "base_speed": 75,
+      "mega_dex": 10056
     },
     {
       "species_id": 359,
@@ -558,7 +592,8 @@
       "base_defense": 60,
       "base_sp_attack": 115,
       "base_sp_defense": 60,
-      "base_speed": 115
+      "base_speed": 115,
+      "mega_dex": 10057
     },
     {
       "species_id": 362,
@@ -574,7 +609,8 @@
       "base_defense": 80,
       "base_sp_attack": 120,
       "base_sp_defense": 80,
-      "base_speed": 100
+      "base_speed": 100,
+      "mega_dex": 10074
     },
     {
       "species_id": 373,
@@ -590,7 +626,8 @@
       "base_defense": 130,
       "base_sp_attack": 120,
       "base_sp_defense": 90,
-      "base_speed": 120
+      "base_speed": 120,
+      "mega_dex": 10089
     },
     {
       "species_id": 376,
@@ -606,7 +643,8 @@
       "base_defense": 150,
       "base_sp_attack": 105,
       "base_sp_defense": 110,
-      "base_speed": 110
+      "base_speed": 110,
+      "mega_dex": 10076
     },
     {
       "species_id": 380,
@@ -622,7 +660,8 @@
       "base_defense": 120,
       "base_sp_attack": 140,
       "base_sp_defense": 150,
-      "base_speed": 110
+      "base_speed": 110,
+      "mega_dex": 10062
     },
     {
       "species_id": 381,
@@ -638,7 +677,8 @@
       "base_defense": 100,
       "base_sp_attack": 160,
       "base_sp_defense": 120,
-      "base_speed": 110
+      "base_speed": 110,
+      "mega_dex": 10063
     },
     {
       "species_id": 384,
@@ -655,7 +695,8 @@
       "base_defense": 100,
       "base_sp_attack": 180,
       "base_sp_defense": 100,
-      "base_speed": 115
+      "base_speed": 115,
+      "mega_dex": 10079
     },
     {
       "species_id": 428,
@@ -671,7 +712,8 @@
       "base_defense": 94,
       "base_sp_attack": 54,
       "base_sp_defense": 96,
-      "base_speed": 135
+      "base_speed": 135,
+      "mega_dex": 10088
     },
     {
       "species_id": 445,
@@ -687,7 +729,8 @@
       "base_defense": 115,
       "base_sp_attack": 120,
       "base_sp_defense": 95,
-      "base_speed": 92
+      "base_speed": 92,
+      "mega_dex": 10058
     },
     {
       "species_id": 448,
@@ -703,7 +746,8 @@
       "base_defense": 88,
       "base_sp_attack": 140,
       "base_sp_defense": 70,
-      "base_speed": 112
+      "base_speed": 112,
+      "mega_dex": 10059
     },
     {
       "species_id": 460,
@@ -719,7 +763,8 @@
       "base_defense": 105,
       "base_sp_attack": 132,
       "base_sp_defense": 105,
-      "base_speed": 30
+      "base_speed": 30,
+      "mega_dex": 10060
     },
     {
       "species_id": 475,
@@ -735,7 +780,8 @@
       "base_defense": 95,
       "base_sp_attack": 65,
       "base_sp_defense": 115,
-      "base_speed": 110
+      "base_speed": 110,
+      "mega_dex": 10068
     },
     {
       "species_id": 531,
@@ -751,7 +797,8 @@
       "base_defense": 126,
       "base_sp_attack": 80,
       "base_sp_defense": 126,
-      "base_speed": 50
+      "base_speed": 50,
+      "mega_dex": 10069
     },
     {
       "species_id": 719,
@@ -767,7 +814,8 @@
       "base_defense": 110,
       "base_sp_attack": 160,
       "base_sp_defense": 110,
-      "base_speed": 110
+      "base_speed": 110,
+      "mega_dex": 10075
     }
   ]
 }

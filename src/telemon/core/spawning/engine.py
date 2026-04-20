@@ -38,8 +38,8 @@ async def get_random_species(session: AsyncSession) -> PokemonSpecies | None:
             selected_rarity = rarity
             break
 
-    # Build query based on rarity
-    query = select(PokemonSpecies)
+    # Build query based on rarity — exclude forms (Megas, regionals) from wild spawns
+    query = select(PokemonSpecies).where(PokemonSpecies.national_dex < 10000)
 
     if selected_rarity == "mythical":
         query = query.where(PokemonSpecies.is_mythical == True)
@@ -66,9 +66,11 @@ async def get_random_species(session: AsyncSession) -> PokemonSpecies | None:
     species = result.scalar_one_or_none()
 
     if species is None:
-        # Fallback: any random Pokemon
+        # Fallback: any random base-form Pokemon
         fallback = await session.execute(
-            select(PokemonSpecies).order_by(func.random()).limit(1)
+            select(PokemonSpecies)
+            .where(PokemonSpecies.national_dex < 10000)
+            .order_by(func.random()).limit(1)
         )
         species = fallback.scalar_one_or_none()
 
