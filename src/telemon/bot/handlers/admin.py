@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telemon.config import BOT_OWNER_ID
 from telemon.core.constants import VALID_TYPES, RARITY_KEYWORDS, MAX_GENERATION
 from telemon.core.spawning import create_spawn, get_random_species
-from telemon.database.models import ActiveSpawn, Group, Pokemon, PokemonSpecies, SpawnAdmin, User
+from telemon.database.models import ActiveSpawn, BotConfig, Group, Pokemon, PokemonSpecies, SpawnAdmin, User
 from telemon.database.models.spawn_admin import SPAWN_PERMISSIONS
 from telemon.logging import get_logger
 
@@ -21,20 +21,60 @@ logger = get_logger(__name__)
 
 
 # ------------------------------------------------------------------ #
-# Runtime configuration (overrides settings without restart)
+# Persistent runtime configuration
 # ------------------------------------------------------------------ #
 
 _runtime_overrides: dict[str, int] = {}
 
-# Allowed config keys and their (min, max) bounds
-_CONFIG_KEYS: dict[str, tuple[int, int]] = {
-    "incense_count": (1, 500),
+# Allowed config keys: (min, max, description)
+_CONFIG_KEYS: dict[str, tuple[int, int, str]] = {
+    "incense_count": (1, 500, "Number of spawns per incense"),
+    "flee_enabled": (0, 1, "Whether wild spawns flee after timeout (0=off, 1=on)"),
+    "spawn_timeout": (30, 3600, "Seconds before a wild spawn flees"),
+    "timed_spawn_min": (1, 120, "Minimum minutes between inactivity spawns"),
+    "timed_spawn_max": (1, 120, "Maximum minutes between inactivity spawns"),
+}
+
+# Default values used when no override is set (matches settings.py defaults)
+_CONFIG_DEFAULTS: dict[str, int] = {
+    "flee_enabled": 1,
+    "timed_spawn_min": 10,
+    "timed_spawn_max": 20,
 }
 
 
 def get_runtime_config(key: str, default: int) -> int:
     """Get a runtime-configurable value, falling back to default."""
     return _runtime_overrides.get(key, default)
+
+
+async def load_runtime_config(session: AsyncSession) -> None:
+    """Load all persisted config from DB into the in-memory cache.
+
+    Call once at bot startup.
+    """
+    result = await session.execute(select(BotConfig))
+    rows = result.scalars().all()
+    for row in rows:
+        try:
+            _runtime_overrides[row.key] = int(row.value)
+        except ValueError:
+            logger.warning("Ignoring non-integer config", key=row.key, value=row.value)
+    if rows:
+        logger.info("Loaded persistent runtime config", count=len(rows), keys=list(_runtime_overrides.keys()))
+
+
+async def _persist_config(session: AsyncSession, key: str, value: int) -> None:
+    """Write a single config key to the database and update the cache."""
+    _runtime_overrides[key] = value
+
+    result = await session.execute(select(BotConfig).where(BotConfig.key == key))
+    existing = result.scalar_one_or_none()
+    if existing:
+        existing.value = str(value)
+    else:
+        session.add(BotConfig(key=key, value=str(value)))
+    await session.commit()
 
 
 # ------------------------------------------------------------------ #
@@ -386,10 +426,17 @@ async def _resolve_species(
                     pass
                 if not species:
                     return None, f"Pokemon '{args['name']}' not found."
+
+        # Block Mega forms — they must only be acquired via /mega
+        if species and species.name_lower.startswith("mega "):
+            return None, (
+                f"<b>{species.name}</b> can't be spawned directly.\n"
+                "Mega Pokémon can only be acquired through /mega evolution."
+            )
         return species, None
 
-    # Build filter query for random selection
-    filters = []
+    # Build filter query for random selection — exclude forms (Megas, regionals)
+    filters = [PokemonSpecies.national_dex < 10000]
 
     if args["gen"]:
         filters.append(PokemonSpecies.generation == args["gen"])
@@ -853,12 +900,14 @@ async def cmd_list_spawners(message: Message, session: AsyncSession) -> None:
 # ------------------------------------------------------------------ #
 
 @router.message(Command("setconfig"))
-async def cmd_setconfig(message: Message) -> None:
+async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
     """Set runtime configuration values. Bot owner only.
 
     Usage:
         /setconfig                      — show current values
         /setconfig incense_count 30     — set incense spawn count to 30
+        /setconfig flee_enabled 0       — disable flee timer
+        /setconfig spawn_timeout 600    — set flee timer to 10 minutes
     """
     if not message.from_user or message.from_user.id != BOT_OWNER_ID:
         await message.answer("Only the bot owner can use this command!")
@@ -868,16 +917,21 @@ async def cmd_setconfig(message: Message) -> None:
     parts = parts[1:]  # Remove /setconfig
 
     if not parts:
-        # Show current config
         from telemon.config import settings
         lines = ["<b>Runtime Config</b>\n"]
-        for key, (lo, hi) in _CONFIG_KEYS.items():
+        for key, (lo, hi, desc) in _CONFIG_KEYS.items():
             current = _runtime_overrides.get(key)
-            default = getattr(settings, key.replace("incense_count", "incense_spawn_count"), "?")
+            if key == "incense_count":
+                default = settings.incense_spawn_count
+            elif key == "spawn_timeout":
+                default = settings.spawn_timeout_seconds
+            else:
+                default = _CONFIG_DEFAULTS.get(key, "?")
             if current is not None:
                 lines.append(f"<b>{key}</b>: {current} (override, default: {default})")
             else:
                 lines.append(f"<b>{key}</b>: {default} (default, range: {lo}-{hi})")
+            lines.append(f"  <i>{desc}</i>")
         lines.append("\n<i>Usage: /setconfig [key] [value]</i>")
         await message.answer("\n".join(lines))
         return
@@ -903,15 +957,27 @@ async def cmd_setconfig(message: Message) -> None:
         await message.answer("Value must be a number!")
         return
 
-    lo, hi = _CONFIG_KEYS[key]
+    lo, hi, _desc = _CONFIG_KEYS[key]
     if value < lo or value > hi:
         await message.answer(f"Value must be between {lo} and {hi}!")
         return
 
-    _runtime_overrides[key] = value
+    # Cross-validate min/max pairs
+    if key == "timed_spawn_min":
+        current_max = get_runtime_config("timed_spawn_max", _CONFIG_DEFAULTS["timed_spawn_max"])
+        if value > current_max:
+            await message.answer(f"timed_spawn_min ({value}) can't exceed timed_spawn_max ({current_max})!")
+            return
+    elif key == "timed_spawn_max":
+        current_min = get_runtime_config("timed_spawn_min", _CONFIG_DEFAULTS["timed_spawn_min"])
+        if value < current_min:
+            await message.answer(f"timed_spawn_max ({value}) can't be less than timed_spawn_min ({current_min})!")
+            return
+
+    await _persist_config(session, key, value)
     await message.answer(
         f"✅ Set <b>{key}</b> = <b>{value}</b>\n"
-        f"Takes effect immediately for new incense activations."
+        f"Saved to database — persists across restarts."
     )
     logger.info("Runtime config changed", key=key, value=value, by=message.from_user.id)
 
@@ -1100,3 +1166,29 @@ def _extract_target(message: Message) -> tuple[int | None, str]:
                 target_username = entity.user.username or str(target_user_id)
 
     return target_user_id, target_username
+
+
+# ------------------------------------------------------------------ #
+# Reload emoji maps
+# ------------------------------------------------------------------ #
+
+@router.message(Command("reload_emoji"))
+async def cmd_reload_emoji(message: Message) -> None:
+    """Hot-reload all emoji map files without restarting the bot."""
+    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+        await message.answer("Only the bot owner can use this command!")
+        return
+
+    from telemon.core.emoji import reload_all_maps, mode_label
+
+    counts = reload_all_maps()
+    lines = [
+        f"<b>Emoji maps reloaded</b> ({mode_label()})\n",
+        f"Pokemon: {counts['pokemon']}",
+        f"Forms: {counts['forms']}",
+        f"Items: {counts['items']}",
+        f"Stones: {counts['stones']}",
+        f"Types: {counts['types']}",
+    ]
+    await message.answer("\n".join(lines))
+    logger.info("Emoji maps reloaded", **counts)

@@ -94,7 +94,6 @@ def _build_shop_keyboard() -> InlineKeyboardBuilder:
         builder.button(
             text=f"{cat['emoji']} {cat['title']} ({count})",
             callback_data=f"shop:{key}",
-            style="primary",
         )
     builder.adjust(2)
     return builder

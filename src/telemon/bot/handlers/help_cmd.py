@@ -418,7 +418,6 @@ def build_help_keyboard() -> InlineKeyboardBuilder:
         builder.button(
             text=f"{cat['emoji']} {cat['title']}",
             callback_data=f"help:{key}",
-            style="primary",
         )
     builder.adjust(2)  # 2 buttons per row
     return builder

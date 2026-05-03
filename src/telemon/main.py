@@ -24,6 +24,7 @@ async def timed_spawn_loop(bot) -> None:
     from telemon.database import async_session_factory
     from telemon.database.models import Group
     from telemon.core.spawning import create_spawn, get_random_species, get_active_spawn
+    from telemon.bot.handlers.admin import get_runtime_config
 
     await asyncio.sleep(60)  # Wait 1 minute after startup
 
@@ -32,11 +33,15 @@ async def timed_spawn_loop(bot) -> None:
 
     def _get_interval(chat_id: int) -> float:
         if chat_id not in _group_intervals:
-            _group_intervals[chat_id] = random.uniform(10, 20)
+            lo = get_runtime_config("timed_spawn_min", 10)
+            hi = get_runtime_config("timed_spawn_max", 20)
+            _group_intervals[chat_id] = random.uniform(lo, hi)
         return _group_intervals[chat_id]
 
     def _reroll_interval(chat_id: int) -> None:
-        _group_intervals[chat_id] = random.uniform(10, 20)
+        lo = get_runtime_config("timed_spawn_min", 10)
+        hi = get_runtime_config("timed_spawn_max", 20)
+        _group_intervals[chat_id] = random.uniform(lo, hi)
 
     while True:
         try:
@@ -321,6 +326,16 @@ async def main() -> None:
         logger.error("Failed to connect to database", error=str(e))
         sys.exit(1)
 
+    # Load persistent runtime config from DB
+    try:
+        from telemon.database import async_session_factory
+        from telemon.bot.handlers.admin import load_runtime_config
+
+        async with async_session_factory() as session:
+            await load_runtime_config(session)
+    except Exception as e:
+        logger.warning("Failed to load runtime config from DB", error=str(e))
+
     # Create bot and dispatcher
     bot = create_bot()
     dp = await create_dispatcher()
@@ -338,7 +353,9 @@ async def main() -> None:
             "Emoji mode configured",
             mode=mode_label(),
             pokemon_emoji=counts["pokemon"],
+            form_emoji=counts["forms"],
             item_emoji=counts["items"],
+            stone_emoji=counts["stones"],
             type_emoji=counts["types"],
         )
 

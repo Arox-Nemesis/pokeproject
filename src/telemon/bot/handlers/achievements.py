@@ -80,7 +80,6 @@ def _build_ach_keyboard(unlocked: set[str]) -> InlineKeyboardBuilder:
         builder.button(
             text=f"{emoji} {cat_name} ({cat_earned}/{len(cat_achs)})",
             callback_data=f"ach:{cat_id}",
-            style="primary",
         )
     builder.adjust(2)
     return builder

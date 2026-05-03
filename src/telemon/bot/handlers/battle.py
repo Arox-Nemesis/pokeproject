@@ -123,7 +123,7 @@ def build_move_keyboard(battle: Battle, user_id: int) -> InlineKeyboardBuilder:
     for i, move in enumerate(moves):
         # Show move name and type
         move_text = f"{move['name']} ({move['type'].title()})"
-        builder.button(text=move_text, callback_data=f"battle:move:{battle.id}:{i}", style="primary")
+        builder.button(text=move_text, callback_data=f"battle:move:{battle.id}:{i}")
     
     builder.button(text="Forfeit", callback_data=f"battle:forfeit:{battle.id}", style="danger")
     builder.adjust(2)
@@ -640,7 +640,7 @@ def build_pve_move_keyboard(state: dict, user_id: int) -> InlineKeyboardBuilder:
 
     for i, move in enumerate(state["player"]["moves"]):
         move_text = f"{move['name']} ({move['type'].title()})"
-        builder.button(text=move_text, callback_data=f"pve:move:{user_id}:{i}", style="primary")
+        builder.button(text=move_text, callback_data=f"pve:move:{user_id}:{i}")
 
 
 

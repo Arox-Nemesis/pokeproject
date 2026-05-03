@@ -365,6 +365,22 @@ async def cmd_info(message: Message, session: AsyncSession, user: User) -> None:
         )
         return
 
+    # Compute inventory index (1-based position ordered by catch date)
+    row_num_sq = (
+        select(
+            Pokemon.id,
+            func.row_number()
+            .over(order_by=Pokemon.caught_at.asc())
+            .label("inv_idx"),
+        )
+        .where(Pokemon.owner_id == user.telegram_id)
+        .subquery()
+    )
+    idx_result = await session.execute(
+        select(row_num_sq.c.inv_idx).where(row_num_sq.c.id == poke.id)
+    )
+    inv_idx = idx_result.scalar() or "?"
+
     # Build detailed info
     shiny = " ✨ SHINY" if poke.is_shiny else ""
     fav = " ❤️" if poke.is_favorite else ""
@@ -399,7 +415,7 @@ async def cmd_info(message: Message, session: AsyncSession, user: User) -> None:
     sprite = poke_emoji(poke.species.national_dex)
     info = f"""\
 {sprite}<b>{poke.display_name}</b>{shiny}{fav}{gender_text}
-{poke.species.name} #{poke.species.national_dex} | Gen {poke.species.generation}{nickname_line}
+{poke.species.name} #{inv_idx} | Gen {poke.species.generation}{nickname_line}
 
 <b>Type:</b> {type_text}
 <b>Level:</b> {poke.level}

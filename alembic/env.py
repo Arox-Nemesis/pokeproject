@@ -34,6 +34,7 @@ from telemon.database.models.wondertrade import WonderTrade
 from telemon.database.models.achievement import UserAchievement
 from telemon.database.models.breeding import DaycareSlot, PokemonEgg
 from telemon.database.models.team import Team
+from telemon.database.models.bot_config import BotConfig
 
 # Alembic Config object
 config = context.config

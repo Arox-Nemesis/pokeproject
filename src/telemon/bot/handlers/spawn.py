@@ -105,11 +105,20 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
     shiny_text = " ✨ SHINY!" if spawn.is_shiny else ""
     rarity_text = get_rarity_text(species)
 
+    from telemon.bot.handlers.admin import get_runtime_config
+
+    flee_enabled = get_runtime_config("flee_enabled", 1)
+    if flee_enabled:
+        timeout = get_runtime_config("spawn_timeout", settings.spawn_timeout_seconds)
+        flee_line = f"<i>It will flee in {timeout // 60} minutes...</i>"
+    else:
+        flee_line = "<i>It won't flee — take your time!</i>"
+
     caption = (
         f"<b>A wild Pokémon has appeared!</b>{shiny_text}\n\n"
         f"Type <code>/catch [name]</code> to catch it!\n"
         f"Use <code>/hint</code> if you need help.\n"
-        f"<i>It will flee in {settings.spawn_timeout_seconds // 60} minutes...</i>"
+        f"{flee_line}"
     )
 
     try:

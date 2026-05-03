@@ -437,9 +437,9 @@ def build_leaderboard_keyboard(
     for label, lb_type in categories:
         if lb_type == current_type:
             label = f"[{label}]"
-            builder.button(text=label, callback_data=f"lb:{lb_type.value}:1")
-        else:
             builder.button(text=label, callback_data=f"lb:{lb_type.value}:1", style="primary")
+        else:
+            builder.button(text=label, callback_data=f"lb:{lb_type.value}:1")
     
     # Pagination row
     if total_pages > 1:
@@ -478,7 +478,7 @@ def format_leaderboard(
         rank_display = get_rank_display(entry["rank"])
         value_display = f"{entry['value']:,}" if isinstance(entry["value"], int) else entry["value"]
         lines.append(
-            f"{rank_display} <b>{entry['username']}</b> — {value_display} {entry['label']}"
+            f"{rank_display} <b><code>{entry['username']}</code></b> — {value_display} {entry['label']}"
         )
     
     return "\n".join(lines)

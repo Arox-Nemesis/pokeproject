@@ -32,6 +32,8 @@ from pathlib import Path
 _EMOJI_MAP: dict[str, str] = {}
 _ITEM_MAP: dict[str, str] = {}
 _TYPE_MAP: dict[str, str] = {}
+_FORM_MAP: dict[str, str] = {}
+_STONE_MAP: dict[str, str] = {}
 _LOADED = False
 _PREMIUM_MODE = False
 _BOT_ID: int | None = None
@@ -110,13 +112,17 @@ def _load_json(filename: str) -> dict:
 
 
 def _load_maps() -> None:
-    global _EMOJI_MAP, _ITEM_MAP, _TYPE_MAP, _LOADED
+    global _EMOJI_MAP, _ITEM_MAP, _TYPE_MAP, _FORM_MAP, _STONE_MAP, _LOADED
     if _LOADED:
         return
 
     _EMOJI_MAP = _load_json("emoji_map.json")
     _ITEM_MAP = _load_json("item_emoji_map.json")
     _TYPE_MAP = _load_json("type_emoji_map.json")
+    _FORM_MAP = _load_json("form_emoji_map.json")
+    _STONE_MAP = _load_json("stone_emoji_map.json")
+    # Merge stones into item map so item_emoji() finds them without handler changes
+    _ITEM_MAP.update(_STONE_MAP)
     _LOADED = True
 
 
@@ -148,7 +154,9 @@ def reload_all_maps() -> dict[str, int]:
     _load_maps()
     return {
         "pokemon": len(_EMOJI_MAP),
+        "forms": len(_FORM_MAP),
         "items": len(_ITEM_MAP),
+        "stones": len(_STONE_MAP),
         "types": len(_TYPE_MAP),
     }
 
@@ -174,7 +182,9 @@ def total_emoji_count() -> dict[str, int]:
     _load_maps()
     return {
         "pokemon": len(_EMOJI_MAP),
+        "forms": len(_FORM_MAP),
         "items": len(_ITEM_MAP),
+        "stones": len(_STONE_MAP),
         "types": len(_TYPE_MAP),
     }
 
@@ -214,6 +224,28 @@ def has_emoji(dex_number: int) -> bool:
     """Check if we have a custom emoji for this species."""
     _load_maps()
     return str(dex_number) in _EMOJI_MAP
+
+
+# ---------------------------------------------------------------------------
+# Form emoji (non-numeric stems like Unown letters, Vivillon patterns)
+# ---------------------------------------------------------------------------
+def form_emoji(stem: str, fallback: str = "") -> str:
+    """Get an inline custom emoji tag for a non-numeric Pokemon form.
+
+    Args:
+        stem: Form stem (e.g. "pikachu-cosplay", "unown-a").
+        fallback: String to return when custom emoji is unavailable.
+
+    Returns:
+        HTML string or fallback.
+    """
+    if not _PREMIUM_MODE:
+        return fallback
+    _load_maps()
+    eid = _FORM_MAP.get(stem)
+    if not eid:
+        return fallback
+    return _tg_emoji_tag(eid)
 
 
 # ---------------------------------------------------------------------------

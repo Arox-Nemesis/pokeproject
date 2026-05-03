@@ -113,8 +113,15 @@ async def create_spawn(
     # Determine shiny status
     is_shiny = force_shiny or should_be_shiny()
 
-    # Calculate expiration
-    expires_at = datetime.utcnow() + timedelta(seconds=settings.spawn_timeout_seconds)
+    # Determine expiration based on flee toggle
+    from telemon.bot.handlers.admin import get_runtime_config
+
+    flee_enabled = get_runtime_config("flee_enabled", 1)
+    if flee_enabled:
+        timeout = get_runtime_config("spawn_timeout", settings.spawn_timeout_seconds)
+        expires_at = datetime.utcnow() + timedelta(seconds=timeout)
+    else:
+        expires_at = datetime.utcnow() + timedelta(days=365 * 100)
 
     # Create spawn
     spawn = ActiveSpawn(
