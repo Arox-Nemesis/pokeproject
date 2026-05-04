@@ -83,7 +83,36 @@ async def timed_spawn_loop(bot) -> None:
 
                     if spawn:
                         from telemon.bot.handlers.spawn import send_spawn_message
-                        msg_id = await send_spawn_message(bot, group.chat_id, spawn)
+                        from aiogram.exceptions import (
+                            TelegramForbiddenError,
+                            TelegramBadRequest,
+                        )
+                        try:
+                            msg_id = await send_spawn_message(bot, group.chat_id, spawn)
+                        except (TelegramForbiddenError, TelegramBadRequest) as e:
+                            # Fatal: bot was kicked, blocked, or chat deleted
+                            await session.delete(spawn)
+                            group.spawn_enabled = False
+                            await session.commit()
+                            logger.warning(
+                                "Auto-disabled spawns for unreachable group",
+                                chat_id=group.chat_id,
+                                error=str(e),
+                            )
+                            _reroll_interval(group.chat_id)
+                            continue
+                        except Exception as e:
+                            # Temporary: rate limit, network blip, etc.
+                            await session.delete(spawn)
+                            await session.commit()
+                            logger.warning(
+                                "Timed spawn send failed (transient)",
+                                chat_id=group.chat_id,
+                                error=str(e),
+                            )
+                            _reroll_interval(group.chat_id)
+                            continue
+
                         if msg_id:
                             spawn.message_id = msg_id
 
@@ -97,18 +126,6 @@ async def timed_spawn_loop(bot) -> None:
                                 chat_id=group.chat_id,
                                 species=species.name,
                                 interval_min=round(interval_mins, 1),
-                            )
-                        else:
-                            # send_spawn_message returned None — likely
-                            # "chat not found" or "bot was kicked".
-                            # Auto-disable spawns for this group so we stop
-                            # hammering a dead chat.
-                            await session.delete(spawn)
-                            group.spawn_enabled = False
-                            await session.commit()
-                            logger.warning(
-                                "Auto-disabled spawns for unreachable group",
-                                chat_id=group.chat_id,
                             )
                         # Re-roll interval for next time
                         _reroll_interval(group.chat_id)
@@ -164,7 +181,34 @@ async def incense_spawn_loop(bot) -> None:
 
                     if spawn:
                         from telemon.bot.handlers.spawn import send_spawn_message
-                        msg_id = await send_spawn_message(bot, uid, spawn)
+                        from aiogram.exceptions import (
+                            TelegramForbiddenError,
+                            TelegramBadRequest,
+                        )
+                        try:
+                            msg_id = await send_spawn_message(bot, uid, spawn)
+                        except (TelegramForbiddenError, TelegramBadRequest):
+                            # Fatal: user blocked the bot — stop incense
+                            await session.delete(spawn)
+                            user.incense_spawns_remaining = 0
+                            await session.commit()
+                            logger.warning(
+                                "Incense DM cancelled — user unreachable",
+                                user_id=uid,
+                            )
+                            continue
+                        except Exception as e:
+                            # Temporary: rate limit, network blip — just
+                            # clean up the ghost spawn, keep incense alive
+                            await session.delete(spawn)
+                            await session.commit()
+                            logger.warning(
+                                "Incense DM spawn failed (transient)",
+                                user_id=uid,
+                                error=str(e),
+                            )
+                            continue
+
                         if msg_id:
                             spawn.message_id = msg_id
                             user.incense_spawns_remaining -= 1
@@ -175,10 +219,6 @@ async def incense_spawn_loop(bot) -> None:
                                 species=species.name,
                                 remaining=user.incense_spawns_remaining,
                             )
-                        else:
-                            await session.delete(spawn)
-                            user.incense_spawns_remaining = 0  # Stop trying
-                            await session.commit()
 
                 # ── Group incense: groups with remaining spawns ──
                 result = await session.execute(
@@ -206,7 +246,34 @@ async def incense_spawn_loop(bot) -> None:
 
                     if spawn:
                         from telemon.bot.handlers.spawn import send_spawn_message
-                        msg_id = await send_spawn_message(bot, cid, spawn)
+                        from aiogram.exceptions import (
+                            TelegramForbiddenError,
+                            TelegramBadRequest,
+                        )
+                        try:
+                            msg_id = await send_spawn_message(bot, cid, spawn)
+                        except (TelegramForbiddenError, TelegramBadRequest):
+                            # Fatal: bot was kicked/blocked — stop incense
+                            await session.delete(spawn)
+                            group.incense_spawns_remaining = 0
+                            await session.commit()
+                            logger.warning(
+                                "Group incense cancelled — group unreachable",
+                                chat_id=cid,
+                            )
+                            continue
+                        except Exception as e:
+                            # Temporary: rate limit, network blip — just
+                            # clean up the ghost spawn, keep incense alive
+                            await session.delete(spawn)
+                            await session.commit()
+                            logger.warning(
+                                "Incense group spawn failed (transient)",
+                                chat_id=cid,
+                                error=str(e),
+                            )
+                            continue
+
                         if msg_id:
                             spawn.message_id = msg_id
                             group.incense_spawns_remaining -= 1
@@ -218,10 +285,6 @@ async def incense_spawn_loop(bot) -> None:
                                 species=species.name,
                                 remaining=group.incense_spawns_remaining,
                             )
-                        else:
-                            await session.delete(spawn)
-                            group.incense_spawns_remaining = 0
-                            await session.commit()
 
         except Exception as e:
             logger.error("Error in incense spawn loop", error=str(e))

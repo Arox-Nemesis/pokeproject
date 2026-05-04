@@ -610,7 +610,10 @@ async def show_market(
 
     keyboard = build_market_keyboard(page, total_pages, filters)
 
-    await message.answer("\n".join(lines), reply_markup=keyboard.as_markup())
+    sent = await message.answer("\n".join(lines), reply_markup=keyboard.as_markup())
+
+    from telemon.bot.handlers._button_owner import set_owner
+    set_owner(sent.message_id, message.from_user.id)
 
 
 async def market_sell(
@@ -1149,6 +1152,11 @@ async def handle_market_callback(
     callback: CallbackQuery, session: AsyncSession
 ) -> None:
     """Handle market pagination callbacks."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     data = callback.data.split(":")
 
     if len(data) < 2:

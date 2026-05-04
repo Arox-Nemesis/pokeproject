@@ -16,13 +16,41 @@ logger = get_logger(__name__)
 
 # Rarity weights for spawning
 RARITY_WEIGHTS = {
-    "common": 60,      # catch_rate > 120
-    "uncommon": 25,    # catch_rate 46-120
-    "rare": 10,        # catch_rate 4-45
-    "ultra_rare": 4,   # catch_rate 1-3
-    "legendary": 0.9,  # is_legendary
+    "common": 55,      # catch_rate > 120
+    "uncommon": 30,    # catch_rate 46-120
+    "rare": 12,        # catch_rate 4-45
+    "ultra_rare": 2.5, # catch_rate 1-3
+    "legendary": 0.4,  # is_legendary
     "mythical": 0.1,   # is_mythical
 }
+
+# Alternate form suffixes that should NOT spawn in the wild.
+# These are forms like "Deoxys Normal", "Giratina Altered", etc. that
+# inflate the spawn pool and cause repetitive/unequal distribution.
+# Legitimate multi-word base names (Mr Mime, Tapu Koko, Iron Hands, etc.)
+# are NOT affected because they don't end with these suffixes.
+_FORM_SUFFIXES = {
+    "normal", "plant", "altered", "land", "red striped", "standard",
+    "incarnate", "ordinary", "aria", "male", "female", "shield",
+    "average", "50", "baile", "midday", "solo", "red meteor",
+    "disguised", "amped", "ice", "full belly", "single strike",
+    "rapid strike", "family of four", "green plumage", "zero",
+    "curly", "two segment",
+}
+
+
+def _is_alternate_form(species_name: str) -> bool:
+    """Return True if the species name looks like an alternate form.
+
+    Checks whether the name (after lowercasing) ends with one of the known
+    form suffixes.  Multi-word base Pokemon (e.g. "Mr Mime", "Tapu Koko")
+    never end with these suffixes so they pass through safely.
+    """
+    name_lower = species_name.lower()
+    for suffix in _FORM_SUFFIXES:
+        if name_lower.endswith(" " + suffix):
+            return True
+    return False
 
 
 async def get_random_species(session: AsyncSession) -> PokemonSpecies | None:
@@ -60,19 +88,29 @@ async def get_random_species(session: AsyncSession) -> PokemonSpecies | None:
     else:  # common
         query = query.where(PokemonSpecies.catch_rate > 120)
 
-    # Let the database handle randomization — avoids loading all rows into memory
-    query = query.order_by(func.random()).limit(1)
+    # Fetch all candidates and filter out alternate forms in Python.
+    # This avoids complex SQL regex and keeps the form-exclusion logic
+    # readable and maintainable.
     result = await session.execute(query)
-    species = result.scalar_one_or_none()
+    candidates = result.scalars().all()
 
-    if species is None:
-        # Fallback: any random base-form Pokemon
-        fallback = await session.execute(
-            select(PokemonSpecies)
-            .where(PokemonSpecies.national_dex < 10000)
-            .order_by(func.random()).limit(1)
-        )
-        species = fallback.scalar_one_or_none()
+    # Filter out alternate forms
+    base_forms = [s for s in candidates if not _is_alternate_form(s.name)]
+
+    if base_forms:
+        return random.choice(base_forms)
+
+    # If no base forms found after filtering, try unfiltered
+    if candidates:
+        return random.choice(candidates)
+
+    # Fallback: any random base-form Pokemon
+    fallback = await session.execute(
+        select(PokemonSpecies)
+        .where(PokemonSpecies.national_dex < 10000)
+        .order_by(func.random()).limit(1)
+    )
+    species = fallback.scalar_one_or_none()
 
     return species
 

@@ -434,16 +434,32 @@ async def callback_execute_move(
     
     if move_result["battle_ended"]:
         # Battle is over
+        winner_id = move_result["winner_id"]
+        loser_id = (
+            battle.player2_id
+            if winner_id == battle.player1_id
+            else battle.player1_id
+        )
+
         winner_result = await session.execute(
-            select(User).where(User.telegram_id == move_result["winner_id"])
+            select(User).where(User.telegram_id == winner_id)
         )
         winner = winner_result.scalar_one()
+
+        loser_result = await session.execute(
+            select(User).where(User.telegram_id == loser_id)
+        )
+        loser = loser_result.scalar_one()
+
+        # Track PvP win/loss stats
+        winner.battle_wins += 1
+        loser.battle_losses += 1
         
         # Award rewards
         winner.balance += move_result["winner_coins"]
         
         # Add XP to winner's Pokemon using leveling system
-        winner_poke_id = (battle.player1_team[0] if move_result["winner_id"] == battle.player1_id 
+        winner_poke_id = (battle.player1_team[0] if winner_id == battle.player1_id 
                          else battle.player2_team[0])
         xp_added, levels_gained, learned_moves = await add_xp_to_pokemon(
             session, str(winner_poke_id), move_result["winner_xp"]
@@ -461,9 +477,9 @@ async def callback_execute_move(
         
         await session.commit()
         
-        # Quest progress for battle win (was missing)
+        # Quest progress for battle win
         from telemon.core.quests import update_quest_progress
-        battle_quest_completed = await update_quest_progress(session, move_result["winner_id"], "battle_win")
+        battle_quest_completed = await update_quest_progress(session, winner_id, "battle_win")
         if battle_quest_completed:
             await session.commit()
             for q in battle_quest_completed:
@@ -471,7 +487,7 @@ async def callback_execute_move(
 
         # Achievement hooks for battle win
         from telemon.core.achievements import check_achievements, format_achievement_notification
-        battle_achs = await check_achievements(session, move_result["winner_id"], "battle_win")
+        battle_achs = await check_achievements(session, winner_id, "battle_win")
         if battle_achs:
             await session.commit()
             lines.append(format_achievement_notification(battle_achs))
@@ -736,7 +752,7 @@ async def cmd_battle_wild(message: Message, session: AsyncSession, user: User) -
         "player_first": player_first,
         "mode": "wild",
         "reward_multiplier": 1.0,
-        "coin_reward_base": 50 + wild_level * 5,
+        "coin_reward_base": 30 + wild_level * 2,
 
     }
 
@@ -833,7 +849,7 @@ async def cmd_battle_npc(
 
     # Build participants
     player_part = await build_pve_participant_from_pokemon_db(session, player_poke)
-    enemy_part = build_pve_participant_from_species(npc_species, npc_level, iv_value=20)
+    enemy_part = build_pve_participant_from_species(npc_species, npc_level, iv_value=31, ev_value=252)
 
     player_first = player_part.speed >= enemy_part.speed
 
@@ -878,7 +894,7 @@ async def cmd_battle_npc(
         "mode": "npc",
         "npc_key": trainer_key,
         "reward_multiplier": trainer_data["reward_multiplier"],
-        "coin_reward_base": int((80 + npc_level * 8) * trainer_data["reward_multiplier"]),
+        "coin_reward_base": int((40 + npc_level * 3) * trainer_data["reward_multiplier"]),
 
     }
 
@@ -982,7 +998,7 @@ async def callback_pve_move(
         state["player"]["hp"] = max(0, state["player"]["hp"] - enemy_result.damage)
 
         if state["player"]["hp"] <= 0:
-            await _handle_pve_loss(callback, user, state, lines)
+            await _handle_pve_loss(callback, session, user, state, lines)
             return
     else:
         # Enemy attacks first
@@ -994,7 +1010,7 @@ async def callback_pve_move(
         state["player"]["hp"] = max(0, state["player"]["hp"] - enemy_result.damage)
 
         if state["player"]["hp"] <= 0:
-            await _handle_pve_loss(callback, user, state, lines)
+            await _handle_pve_loss(callback, session, user, state, lines)
             return
 
         # Player attacks
@@ -1119,6 +1135,7 @@ async def _handle_pve_win(
 
 async def _handle_pve_loss(
     callback: CallbackQuery,
+    session: AsyncSession,
     user: User,
     state: dict,
     lines: list[str],
@@ -1126,6 +1143,10 @@ async def _handle_pve_loss(
     """Handle player losing a PvE battle."""
     player_name = state["player"]["name"]
     enemy_label = state.get("enemy_label", "Wild Pokemon")
+
+    # Track PvE loss stat
+    user.battle_losses += 1
+    await session.commit()
 
     lines.extend([
         "",

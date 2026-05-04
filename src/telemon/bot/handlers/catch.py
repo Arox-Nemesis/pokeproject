@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from rapidfuzz import fuzz
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,11 +74,55 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
         await message.answer(" There's no wild Pokemon here right now!")
         return
 
-    # Check if name matches (with fuzzy matching for typos)
+    # Check if name matches (exact match, case-insensitive)
+    # Hyphens and spaces are stripped for comparison so "hooh" matches "ho-oh"
+    # and "mrmime" matches "mr-mime".
     actual_name = spawn.species.name_lower
-    similarity = fuzz.ratio(pokemon_name, actual_name)
 
-    if similarity < 85:  # Require 85% similarity
+    def _normalize(n: str) -> str:
+        return n.lower().replace("-", "").replace(" ", "").strip()
+
+    # Multi-word base names that must NOT be split when extracting base names.
+    # e.g. "mr-mime" is a base name, not a form of "mr".
+    _BASE_NAME_WHITELIST = {
+        "mr-mime", "mime-jr", "ho-oh", "porygon-z", "type-null",
+        "jangmo-o", "hakamo-o", "kommo-o", "nidoran-f", "nidoran-m",
+        "tapu-koko", "tapu-lele", "tapu-bulu", "tapu-fini", "mr-rime",
+        "chi-yu", "chien-pao", "ting-lu", "wo-chien",
+        "great-tusk", "scream-tail", "brute-bonnet", "flutter-mane",
+        "slither-wing", "sandy-shocks", "roaring-moon", "walking-wake",
+        "gouging-fire", "raging-bolt",
+        "iron-treads", "iron-bundle", "iron-hands", "iron-jugulis",
+        "iron-moth", "iron-thorns", "iron-valiant", "iron-leaves",
+        "iron-boulder", "iron-crown",
+    }
+
+    def _get_base_name(name_lower: str) -> str | None:
+        """Extract the base Pokemon name from a form name.
+
+        e.g. "urshifu-single-strike" → "urshifu"
+             "deoxys-normal" → "deoxys"
+             "mr-mime" → None (it's already a base name)
+        Returns None if the name is already a base name.
+        """
+        if name_lower in _BASE_NAME_WHITELIST:
+            return None
+        if "-" in name_lower:
+            return name_lower.split("-")[0]
+        if " " in name_lower:
+            return name_lower.split(" ")[0]
+        return None
+
+    # Check exact match (normalized — strips hyphens/spaces)
+    name_matches = _normalize(pokemon_name) == _normalize(actual_name)
+
+    # Also check base-name match for form Pokemon
+    if not name_matches:
+        base = _get_base_name(actual_name)
+        if base:
+            name_matches = _normalize(pokemon_name) == _normalize(base)
+
+    if not name_matches:
         # Wrong name
         await message.answer(
             f" That's not the right Pokemon!\n"

@@ -607,7 +607,10 @@ async def show_leaderboard(
     
     keyboard = build_leaderboard_keyboard(lb_type, page, total_pages)
     
-    await message.answer(text, reply_markup=keyboard.as_markup())
+    sent = await message.answer(text, reply_markup=keyboard.as_markup())
+
+    from telemon.bot.handlers._button_owner import set_owner
+    set_owner(sent.message_id, user.telegram_id)
 
 
 @router.callback_query(F.data.startswith("lb:"))
@@ -615,6 +618,11 @@ async def handle_leaderboard_callback(
     callback: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     """Handle leaderboard navigation callbacks."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     data = callback.data.split(":")
     
     if len(data) < 2:

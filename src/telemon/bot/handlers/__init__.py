@@ -17,6 +17,7 @@ from telemon.bot.handlers import (
     pokemon,
     profile,
     quests,
+    runtime,
     shinyhunt,
     shop,
     spawn,
@@ -68,6 +69,9 @@ def register_all_handlers(dp: Dispatcher) -> None:
 
     # Admin handlers
     dp.include_router(admin.router)
+
+    # Runtime restart/rebuild (owner-only)
+    dp.include_router(runtime.router)
 
     # Spawn handler (MUST be last - catches all group messages)
     dp.include_router(spawn.router)

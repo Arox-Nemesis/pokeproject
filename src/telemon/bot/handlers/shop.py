@@ -150,12 +150,20 @@ def _shop_category_keyboard(key: str, page: int = 0) -> InlineKeyboardBuilder:
 async def cmd_shop(message: Message) -> None:
     """Handle /shop command."""
     keyboard = _build_shop_keyboard()
-    await message.answer(SHOP_OVERVIEW, reply_markup=keyboard.as_markup())
+    sent = await message.answer(SHOP_OVERVIEW, reply_markup=keyboard.as_markup())
+
+    from telemon.bot.handlers._button_owner import set_owner
+    set_owner(sent.message_id, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("shop:"))
 async def callback_shop(callback: CallbackQuery) -> None:
     """Handle shop category selection and pagination."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     parts = (callback.data or "").split(":")
     if len(parts) < 2:
         await callback.answer()

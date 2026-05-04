@@ -573,7 +573,10 @@ async def show_pokedex_list(
     text = format_pokedex_list_text(entries, total_count, filter_type, gen)
     keyboard = build_pokedex_keyboard(page, total_pages, filter_type, gen)
 
-    await message.answer(text, reply_markup=keyboard.as_markup())
+    sent = await message.answer(text, reply_markup=keyboard.as_markup())
+
+    from telemon.bot.handlers._button_owner import set_owner
+    set_owner(sent.message_id, user.telegram_id)
 
 
 def format_pokedex_list_text(
@@ -964,6 +967,11 @@ async def handle_dexentry_callback(
     callback: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     """Handle pagination between entry pages (overview/details/forms)."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     parts = (callback.data or "").split(":")
     if len(parts) < 3:
         await callback.answer("Invalid callback")
@@ -1043,6 +1051,11 @@ async def handle_pokedex_callback(
     callback: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     """Handle pokedex pagination and filter callbacks."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     data = callback.data.split(":")
 
     if len(data) < 2:

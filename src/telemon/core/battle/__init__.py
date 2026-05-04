@@ -762,70 +762,70 @@ NPC_TRAINERS: dict[str, dict] = {
         "title": "Gym Leader Brock",
         "species_id": 95,  # Onix
         "level_offset": 0,
-        "reward_multiplier": 1.5,
+        "reward_multiplier": 1.0,
         "quote": "My rock-hard willpower is legendary!",
     },
     "misty": {
         "title": "Gym Leader Misty",
         "species_id": 121,  # Starmie
         "level_offset": 2,
-        "reward_multiplier": 1.5,
+        "reward_multiplier": 1.0,
         "quote": "My water Pokemon are the best!",
     },
     "surge": {
         "title": "Lt. Surge",
         "species_id": 26,  # Raichu
         "level_offset": 3,
-        "reward_multiplier": 1.6,
+        "reward_multiplier": 1.0,
         "quote": "Hey kid, you won't live long in combat!",
     },
     "erika": {
         "title": "Gym Leader Erika",
         "species_id": 45,  # Vileplume
         "level_offset": 4,
-        "reward_multiplier": 1.6,
+        "reward_multiplier": 1.0,
         "quote": "I love the sweet fragrance of flowers...",
     },
     "koga": {
         "title": "Gym Leader Koga",
         "species_id": 110,  # Weezing
         "level_offset": 5,
-        "reward_multiplier": 1.7,
+        "reward_multiplier": 1.2,
         "quote": "A ninja strikes from the shadows!",
     },
     "sabrina": {
         "title": "Gym Leader Sabrina",
         "species_id": 65,  # Alakazam
         "level_offset": 6,
-        "reward_multiplier": 1.8,
+        "reward_multiplier": 1.2,
         "quote": "I foresaw your arrival...",
     },
     "blaine": {
         "title": "Gym Leader Blaine",
         "species_id": 59,  # Arcanine
         "level_offset": 7,
-        "reward_multiplier": 1.8,
+        "reward_multiplier": 1.2,
         "quote": "Hah! My Pokemon are all fired up!",
     },
     "giovanni": {
         "title": "Gym Leader Giovanni",
         "species_id": 34,  # Nidoking
         "level_offset": 8,
-        "reward_multiplier": 2.0,
+        "reward_multiplier": 1.5,
         "quote": "I shall show you the true power of Team Rocket!",
     },
     "lance": {
         "title": "Elite Four Lance",
         "species_id": 149,  # Dragonite
         "level_offset": 10,
-        "reward_multiplier": 2.5,
+        "reward_multiplier": 1.8,
         "quote": "You dare challenge the Dragon Master?",
     },
     "red": {
         "title": "Champion Red",
         "species_id": 6,  # Charizard
         "level_offset": 15,
-        "reward_multiplier": 3.0,
+        "reward_multiplier": 2.0,
         "quote": "...",
     },
 }
@@ -862,18 +862,18 @@ def get_species_moves(type1: str, type2: str | None, level: int) -> list[dict]:
 
 
 def build_pve_participant_from_species(
-    species: PokemonSpecies, level: int, iv_value: int = 15
+    species: PokemonSpecies, level: int, iv_value: int = 15, ev_value: int = 0
 ) -> PveParticipant:
-    """Build a PveParticipant from species data with fixed IVs."""
+    """Build a PveParticipant from species data with fixed IVs and EVs."""
     t1 = species.type1.lower()
     t2 = species.type2.lower() if species.type2 else None
 
-    hp = calculate_stat(species.base_hp, iv_value, 0, level, is_hp=True)
-    attack = calculate_stat(species.base_attack, iv_value, 0, level)
-    defense = calculate_stat(species.base_defense, iv_value, 0, level)
-    sp_attack = calculate_stat(species.base_sp_attack, iv_value, 0, level)
-    sp_defense = calculate_stat(species.base_sp_defense, iv_value, 0, level)
-    speed = calculate_stat(species.base_speed, iv_value, 0, level)
+    hp = calculate_stat(species.base_hp, iv_value, ev_value, level, is_hp=True)
+    attack = calculate_stat(species.base_attack, iv_value, ev_value, level)
+    defense = calculate_stat(species.base_defense, iv_value, ev_value, level)
+    sp_attack = calculate_stat(species.base_sp_attack, iv_value, ev_value, level)
+    sp_defense = calculate_stat(species.base_sp_defense, iv_value, ev_value, level)
+    speed = calculate_stat(species.base_speed, iv_value, ev_value, level)
 
     moves = get_species_moves(t1, t2, level)
 

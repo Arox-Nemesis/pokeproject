@@ -95,7 +95,12 @@ def _is_valid_message(message: Message) -> bool:
 
 
 async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int | None:
-    """Send a spawn message with Pokemon image and return message ID."""
+    """Send a spawn message with Pokemon image and return message ID.
+
+    Raises Telegram API errors (Forbidden, BadRequest, etc.) so callers
+    can decide whether the failure is fatal or transient.  Only local
+    errors (image generation, I/O) are swallowed and result in ``None``.
+    """
     from aiogram.types import BufferedInputFile
     from telemon.core.imaging import generate_spawn_image
 
@@ -121,42 +126,41 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
         f"{flee_line}"
     )
 
+    # Generate spawn image (local I/O — swallow failures)
+    image_data = None
     try:
-        # Generate spawn image with typed background
         image_data = await generate_spawn_image(
             dex_number=species.national_dex,
             primary_type=species.type1 or "normal",
             shiny=spawn.is_shiny,
         )
-
-        if image_data:
-            # Send generated image as file upload
-            photo = BufferedInputFile(
-                file=image_data.read(),
-                filename=f"spawn_{species.national_dex}.jpg",
-            )
-            msg = await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=caption,
-            )
-        elif species.sprite_url:
-            # Fallback to direct URL
-            msg = await bot.send_photo(
-                chat_id=chat_id,
-                photo=species.sprite_url,
-                caption=caption,
-            )
-        else:
-            # Fallback to text only
-            msg = await bot.send_message(
-                chat_id=chat_id,
-                text=caption,
-            )
-        return msg.message_id
     except Exception as e:
-        logger.error("Failed to send spawn message", error=str(e), chat_id=chat_id)
-        return None
+        logger.debug("Image generation failed, using fallback", error=str(e))
+
+    # Send to Telegram — let API errors propagate to the caller so it
+    # can distinguish fatal (bot kicked) from transient (rate-limit).
+    if image_data:
+        photo = BufferedInputFile(
+            file=image_data.read(),
+            filename=f"spawn_{species.national_dex}.jpg",
+        )
+        msg = await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+        )
+    elif species.sprite_url:
+        msg = await bot.send_photo(
+            chat_id=chat_id,
+            photo=species.sprite_url,
+            caption=caption,
+        )
+    else:
+        msg = await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+        )
+    return msg.message_id
 
 
 def get_rarity_text(species: PokemonSpecies) -> str:
@@ -270,7 +274,35 @@ async def track_group_message(
 
             if spawn:
                 # Send spawn message
-                msg_id = await send_spawn_message(bot, chat_id, spawn)
+                from aiogram.exceptions import (
+                    TelegramForbiddenError,
+                    TelegramBadRequest,
+                )
+                try:
+                    msg_id = await send_spawn_message(bot, chat_id, spawn)
+                except (TelegramForbiddenError, TelegramBadRequest) as e:
+                    # Fatal: bot was kicked/blocked — disable spawns
+                    await session.delete(spawn)
+                    group.spawn_enabled = False
+                    await session.commit()
+                    logger.warning(
+                        "Auto-disabled spawns for unreachable group",
+                        chat_id=chat_id,
+                        error=str(e),
+                    )
+                    return
+                except Exception as e:
+                    # Temporary: rate limit, network blip
+                    await session.delete(spawn)
+                    logger.warning(
+                        "Spawn message send failed (transient)",
+                        chat_id=chat_id,
+                        species=species.name,
+                        error=str(e),
+                    )
+                    await session.commit()
+                    return
+
                 if msg_id:
                     spawn.message_id = msg_id
 
@@ -288,13 +320,5 @@ async def track_group_message(
                         rarity="legendary" if species.is_legendary else "mythical" if species.is_mythical else "normal",
                     )
                     return
-                else:
-                    # Message send failed — remove the ghost spawn record
-                    await session.delete(spawn)
-                    logger.warning(
-                        "Spawn message send failed, removing spawn record",
-                        chat_id=chat_id,
-                        species=species.name,
-                    )
 
     await session.commit()

@@ -454,12 +454,20 @@ async def cmd_help(message: Message) -> None:
             return
 
     keyboard = build_help_keyboard()
-    await message.answer(HELP_OVERVIEW, reply_markup=keyboard.as_markup())
+    sent = await message.answer(HELP_OVERVIEW, reply_markup=keyboard.as_markup())
+
+    from telemon.bot.handlers._button_owner import set_owner
+    set_owner(sent.message_id, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("help:"))
 async def callback_help(callback: CallbackQuery) -> None:
     """Handle help category selection."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     data = callback.data.split(":", 1)
     if len(data) < 2:
         await callback.answer()

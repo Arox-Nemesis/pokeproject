@@ -415,7 +415,11 @@ async def _team_members(message: Message, session: AsyncSession, user: User) -> 
         return
 
     text, kb = await _build_members_page(session, user.team_id, 1)
-    await message.answer(text, reply_markup=kb.as_markup() if kb else None)
+    sent = await message.answer(text, reply_markup=kb.as_markup() if kb else None)
+
+    if kb:
+        from telemon.bot.handlers._button_owner import set_owner
+        set_owner(sent.message_id, user.telegram_id)
 
 
 async def _build_members_page(
@@ -453,6 +457,11 @@ async def _build_members_page(
 @router.callback_query(F.data.startswith("tm:"))
 async def callback_team_members(callback: CallbackQuery, session: AsyncSession) -> None:
     """Handle team members pagination."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     parts = (callback.data or "").split(":")
     if len(parts) < 3:
         await callback.answer()
@@ -477,7 +486,11 @@ async def callback_team_members(callback: CallbackQuery, session: AsyncSession) 
 async def _team_list(message: Message, session: AsyncSession) -> None:
     """Show all teams page 1."""
     text, kb = await _build_team_list_page(session, 1)
-    await message.answer(text, reply_markup=kb.as_markup() if kb else None)
+    sent = await message.answer(text, reply_markup=kb.as_markup() if kb else None)
+
+    if kb:
+        from telemon.bot.handlers._button_owner import set_owner
+        set_owner(sent.message_id, message.from_user.id)
 
 
 async def _build_team_list_page(
@@ -520,6 +533,11 @@ async def _build_team_list_page(
 @router.callback_query(F.data.startswith("tl:"))
 async def callback_team_list(callback: CallbackQuery, session: AsyncSession) -> None:
     """Handle team list pagination."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     parts = (callback.data or "").split(":")
     if len(parts) < 2:
         await callback.answer()

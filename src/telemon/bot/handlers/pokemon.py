@@ -346,7 +346,11 @@ async def cmd_pokemon(message: Message, session: AsyncSession, user: User) -> No
         builder.button(text="Next ▶️", callback_data=f"pokemon:page:{page + 1}{cb_filter}")
     builder.adjust(2)
 
-    await message.answer("\n".join(lines), reply_markup=builder.as_markup() if total_pages > 1 else None)
+    sent = await message.answer("\n".join(lines), reply_markup=builder.as_markup() if total_pages > 1 else None)
+
+    if total_pages > 1:
+        from telemon.bot.handlers._button_owner import set_owner
+        set_owner(sent.message_id, user.telegram_id)
 
 
 @router.message(Command("info", "i"))
@@ -610,6 +614,11 @@ async def callback_release(
     callback: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     """Handle release confirmation callbacks."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     if not callback.data:
         return
 
@@ -648,6 +657,11 @@ async def callback_pokemon_page(
     callback: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     """Handle Pokemon list pagination callbacks."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     if not callback.data:
         return
 
@@ -1128,6 +1142,11 @@ async def callback_bulk_release(
     callback: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     """Handle bulk release confirmation callbacks."""
+    from telemon.bot.handlers._button_owner import check_owner
+    if not check_owner(callback.message.message_id, callback.from_user.id):
+        await callback.answer("These buttons aren't for you!", show_alert=True)
+        return
+
     if not callback.data:
         return
 

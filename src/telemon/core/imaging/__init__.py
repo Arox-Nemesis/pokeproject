@@ -20,7 +20,16 @@ logger = get_logger(__name__)
 
 # Cache directory for generated spawn images
 CACHE_DIR = Path(__file__).parent.parent.parent.parent.parent / "data" / "spawn_cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # Verify we can actually write to the directory
+    _test_path = CACHE_DIR / ".write_test"
+    _test_path.touch()
+    _test_path.unlink()
+except (PermissionError, OSError):
+    # Fall back to a temp directory if the data volume isn't writable
+    CACHE_DIR = Path("/tmp/spawn_cache")
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Official artwork base URL (475x475, transparent PNG)
 ARTWORK_BASE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork"
