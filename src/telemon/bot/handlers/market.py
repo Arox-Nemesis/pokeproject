@@ -14,7 +14,13 @@ from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import CURRENCY_SHORT
-from telemon.core.constants import VALID_TYPES, MAX_IV_TOTAL, MARKET_MIN_PRICE, MARKET_MAX_PRICE, MARKET_LISTING_DAYS
+from telemon.core.constants import (
+    VALID_TYPES,
+    MAX_IV_TOTAL,
+    MARKET_MIN_PRICE,
+    MARKET_MAX_PRICE,
+    MARKET_LISTING_DAYS,
+)
 from telemon.database.models import (
     ListingStatus,
     MarketListing,
@@ -31,8 +37,51 @@ logger = get_logger(__name__)
 LISTINGS_PER_PAGE = 5
 
 
+def parse_price_string(raw: str) -> int:
+    """Robustly parse a price string (handles k/m suffixes, and commas/dots)."""
+    raw = raw.lower().strip()
+
+    # Handle multipliers
+    multiplier = 1
+    if raw.endswith("k"):
+        multiplier = 1000
+        raw = raw[:-1]
+    elif raw.endswith("m"):
+        multiplier = 1000000
+        raw = raw[:-1]
+
+    comma_count = raw.count(",")
+    dot_count = raw.count(".")
+
+    if comma_count > 0 and dot_count > 0:
+        # e.g., 1,500.50 or 1.500,50
+        last_comma = raw.rfind(",")
+        last_dot = raw.rfind(".")
+        if last_dot > last_comma:
+            raw = raw.replace(",", "")
+        else:
+            raw = raw.replace(".", "").replace(",", ".")
+    elif comma_count > 1:
+        raw = raw.replace(",", "")
+    elif dot_count > 1:
+        raw = raw.replace(".", "")
+    elif comma_count == 1:
+        parts = raw.split(",")
+        if len(parts[1]) == 3 and multiplier == 1:
+            raw = raw.replace(",", "")
+        else:
+            raw = raw.replace(",", ".")
+    elif dot_count == 1:
+        parts = raw.split(".")
+        if len(parts[1]) == 3 and multiplier == 1:
+            raw = raw.replace(".", "")
+
+    return int(float(raw) * multiplier)
+
+
 class SortOrder(str, Enum):
     """Sort order options for market listings."""
+
     NEWEST = "newest"
     OLDEST = "oldest"
     PRICE_LOW = "price_low"
@@ -46,6 +95,7 @@ class SortOrder(str, Enum):
 @dataclass
 class MarketFilters:
     """Filters for market search."""
+
     name: str | None = None
     pokemon_type: str | None = None
     min_level: int | None = None
@@ -168,55 +218,52 @@ def parse_filters_from_args(args: list[str]) -> MarketFilters:
     text = " ".join(args)
 
     # Parse --name or -n
-    name_match = re.search(r'(?:--name|-n)\s+(\S+)', text)
+    name_match = re.search(r"(?:--name|-n)\s+(\S+)", text)
     if name_match:
         filters.name = name_match.group(1)
 
     # Parse --type or -t
-    type_match = re.search(r'(?:--type|-t)\s+(\S+)', text)
+    type_match = re.search(r"(?:--type|-t)\s+(\S+)", text)
     if type_match:
         type_val = type_match.group(1).lower()
         if type_val in VALID_TYPES:
             filters.pokemon_type = type_val
 
     # Parse --level or -l (supports ranges like 50-100, 50+, or just 50)
-    level_match = re.search(r'(?:--level|-l)\s+(\d+)(?:-(\d+)|\+)?', text)
+    level_match = re.search(r"(?:--level|-l)\s+(\d+)(?:-(\d+)|\+)?", text)
     if level_match:
         filters.min_level = int(level_match.group(1))
         if level_match.group(2):
             filters.max_level = int(level_match.group(2))
-        elif not text[level_match.end()-1:level_match.end()] == '+':
+        elif not text[level_match.end() - 1 : level_match.end()] == "+":
             # Just a single number means exact level
             filters.max_level = filters.min_level
 
     # Parse --iv or -i (supports ranges like 90-100, 90+, or just 90)
-    iv_match = re.search(r'(?:--iv|-i)\s+(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?)|\+)?', text)
+    iv_match = re.search(r"(?:--iv|-i)\s+(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?)|\+)?", text)
     if iv_match:
         filters.min_iv = float(iv_match.group(1))
         if iv_match.group(2):
             filters.max_iv = float(iv_match.group(2))
 
     # Parse --price or -p (supports ranges and k/m suffixes)
-    price_match = re.search(r'(?:--price|-p)\s+(\d+[km]?)(?:-(\d+[km]?))?', text, re.IGNORECASE)
+    price_match = re.search(
+        r"(?:--price|-p)\s+([\d\.,]+[km]?)(?:-([\d\.,]+[km]?))?", text, re.IGNORECASE
+    )
     if price_match:
-        def parse_price(s: str) -> int:
-            s = s.lower().replace(",", "")
-            if s.endswith("k"):
-                return int(float(s[:-1]) * 1000)
-            if s.endswith("m"):
-                return int(float(s[:-1]) * 1000000)
-            return int(s)
-
-        filters.min_price = parse_price(price_match.group(1))
-        if price_match.group(2):
-            filters.max_price = parse_price(price_match.group(2))
+        try:
+            filters.min_price = parse_price_string(price_match.group(1))
+            if price_match.group(2):
+                filters.max_price = parse_price_string(price_match.group(2))
+        except ValueError:
+            pass
 
     # Parse --shiny or -s
-    if re.search(r'(?:--shiny|-s)(?:\s|$)', text):
+    if re.search(r"(?:--shiny|-s)(?:\s|$)", text):
         filters.shiny_only = True
 
     # Parse --sort (newest, oldest, price, level, iv with optional +/- for direction)
-    sort_match = re.search(r'--sort\s+(\S+)', text)
+    sort_match = re.search(r"--sort\s+(\S+)", text)
     if sort_match:
         sort_val = sort_match.group(1).lower()
         sort_map = {
@@ -236,9 +283,17 @@ def parse_filters_from_args(args: list[str]) -> MarketFilters:
             filters.sort_by = sort_map[sort_val]
 
     # If no flags found, treat entire args as a name search
-    if not any([filters.name, filters.pokemon_type, filters.min_level,
-                filters.min_iv, filters.min_price, filters.shiny_only,
-                filters.sort_by != SortOrder.NEWEST]):
+    if not any(
+        [
+            filters.name,
+            filters.pokemon_type,
+            filters.min_level,
+            filters.min_iv,
+            filters.min_price,
+            filters.shiny_only,
+            filters.sort_by != SortOrder.NEWEST,
+        ]
+    ):
         # Check if args look like filter flags
         if args and not args[0].startswith("-"):
             filters.name = " ".join(args)
@@ -249,9 +304,7 @@ def parse_filters_from_args(args: list[str]) -> MarketFilters:
 async def get_user_pokemon_list(session: AsyncSession, user_id: int) -> list[Pokemon]:
     """Get all Pokemon for a user ordered by catch time."""
     result = await session.execute(
-        select(Pokemon)
-        .where(Pokemon.owner_id == user_id)
-        .order_by(Pokemon.caught_at.asc())
+        select(Pokemon).where(Pokemon.owner_id == user_id).order_by(Pokemon.caught_at.asc())
     )
     return list(result.scalars().all())
 
@@ -281,8 +334,8 @@ async def get_active_listings(
     if filters.pokemon_type:
         # Match either type1 or type2
         pokemon_conditions.append(
-            (PokemonSpecies.type1.ilike(filters.pokemon_type)) |
-            (PokemonSpecies.type2.ilike(filters.pokemon_type))
+            (PokemonSpecies.type1.ilike(filters.pokemon_type))
+            | (PokemonSpecies.type2.ilike(filters.pokemon_type))
         )
 
     if filters.min_level:
@@ -301,9 +354,13 @@ async def get_active_listings(
         base_conditions.append(MarketListing.price <= filters.max_price)
 
     # Build query with joins for Pokemon-based filters
-    if pokemon_conditions or filters.min_iv or filters.max_iv or filters.sort_by in [
-        SortOrder.LEVEL_LOW, SortOrder.LEVEL_HIGH, SortOrder.IV_LOW, SortOrder.IV_HIGH
-    ]:
+    if (
+        pokemon_conditions
+        or filters.min_iv
+        or filters.max_iv
+        or filters.sort_by
+        in [SortOrder.LEVEL_LOW, SortOrder.LEVEL_HIGH, SortOrder.IV_LOW, SortOrder.IV_HIGH]
+    ):
         # We need to join with Pokemon (and Species for type/name filters)
         query = (
             select(MarketListing)
@@ -318,10 +375,14 @@ async def get_active_listings(
         # IV filtering requires computing total IV
         if filters.min_iv or filters.max_iv:
             iv_total = (
-                Pokemon.iv_hp + Pokemon.iv_attack + Pokemon.iv_defense +
-                Pokemon.iv_sp_attack + Pokemon.iv_sp_defense + Pokemon.iv_speed
+                Pokemon.iv_hp
+                + Pokemon.iv_attack
+                + Pokemon.iv_defense
+                + Pokemon.iv_sp_attack
+                + Pokemon.iv_sp_defense
+                + Pokemon.iv_speed
             )
-            iv_percentage = (iv_total * 100.0 / MAX_IV_TOTAL)
+            iv_percentage = iv_total * 100.0 / MAX_IV_TOTAL
 
             if filters.min_iv:
                 query = query.where(iv_percentage >= filters.min_iv)
@@ -339,10 +400,14 @@ async def get_active_listings(
             count_query = count_query.where(and_(*pokemon_conditions))
         if filters.min_iv or filters.max_iv:
             iv_total = (
-                Pokemon.iv_hp + Pokemon.iv_attack + Pokemon.iv_defense +
-                Pokemon.iv_sp_attack + Pokemon.iv_sp_defense + Pokemon.iv_speed
+                Pokemon.iv_hp
+                + Pokemon.iv_attack
+                + Pokemon.iv_defense
+                + Pokemon.iv_sp_attack
+                + Pokemon.iv_sp_defense
+                + Pokemon.iv_speed
             )
-            iv_percentage = (iv_total * 100.0 / MAX_IV_TOTAL)
+            iv_percentage = iv_total * 100.0 / MAX_IV_TOTAL
             if filters.min_iv:
                 count_query = count_query.where(iv_percentage >= filters.min_iv)
             if filters.max_iv:
@@ -363,14 +428,22 @@ async def get_active_listings(
             query = query.order_by(Pokemon.level.desc())
         elif filters.sort_by == SortOrder.IV_LOW:
             iv_total = (
-                Pokemon.iv_hp + Pokemon.iv_attack + Pokemon.iv_defense +
-                Pokemon.iv_sp_attack + Pokemon.iv_sp_defense + Pokemon.iv_speed
+                Pokemon.iv_hp
+                + Pokemon.iv_attack
+                + Pokemon.iv_defense
+                + Pokemon.iv_sp_attack
+                + Pokemon.iv_sp_defense
+                + Pokemon.iv_speed
             )
             query = query.order_by(iv_total.asc())
         elif filters.sort_by == SortOrder.IV_HIGH:
             iv_total = (
-                Pokemon.iv_hp + Pokemon.iv_attack + Pokemon.iv_defense +
-                Pokemon.iv_sp_attack + Pokemon.iv_sp_defense + Pokemon.iv_speed
+                Pokemon.iv_hp
+                + Pokemon.iv_attack
+                + Pokemon.iv_defense
+                + Pokemon.iv_sp_attack
+                + Pokemon.iv_sp_defense
+                + Pokemon.iv_speed
             )
             query = query.order_by(iv_total.desc())
 
@@ -405,9 +478,7 @@ async def get_active_listings(
     return listings, total_count
 
 
-async def get_user_listings(
-    session: AsyncSession, user_id: int
-) -> list[MarketListing]:
+async def get_user_listings(session: AsyncSession, user_id: int) -> list[MarketListing]:
     """Get active listings for a user."""
     result = await session.execute(
         select(MarketListing)
@@ -423,18 +494,14 @@ async def format_listing(
 ) -> str:
     """Format a single listing for display."""
     # Get Pokemon details
-    result = await session.execute(
-        select(Pokemon).where(Pokemon.id == listing.pokemon_id)
-    )
+    result = await session.execute(select(Pokemon).where(Pokemon.id == listing.pokemon_id))
     pokemon = result.scalar_one_or_none()
 
     if not pokemon:
         return f"#{index or '?'} - [Pokemon not found]"
 
     # Get seller info
-    seller_result = await session.execute(
-        select(User).where(User.telegram_id == listing.seller_id)
-    )
+    seller_result = await session.execute(select(User).where(User.telegram_id == listing.seller_id))
     seller = seller_result.scalar_one_or_none()
     seller_name = seller.display_name if seller else f"User {listing.seller_id}"
 
@@ -526,8 +593,7 @@ async def cmd_market(message: Message, session: AsyncSession, user: User) -> Non
             await market_search(message, session, args[1:])
         else:
             await message.answer(
-                "❓ Unknown market command.\n\n"
-                "Use /market help for full command list."
+                "❓ Unknown market command.\n\nUse /market help for full command list."
             )
 
 
@@ -571,9 +637,7 @@ async def show_market(
     filters: MarketFilters | None = None,
 ) -> None:
     """Show market listings with pagination."""
-    listings, total_count = await get_active_listings(
-        session, page=page, filters=filters
-    )
+    listings, total_count = await get_active_listings(session, page=page, filters=filters)
 
     if not listings and page == 1:
         filter_note = ""
@@ -613,12 +677,11 @@ async def show_market(
     sent = await message.answer("\n".join(lines), reply_markup=keyboard.as_markup())
 
     from telemon.bot.handlers._button_owner import set_owner
+
     set_owner(sent.message_id, message.from_user.id)
 
 
-async def market_sell(
-    message: Message, session: AsyncSession, user: User, args: list
-) -> None:
+async def market_sell(message: Message, session: AsyncSession, user: User, args: list) -> None:
     """List a Pokemon for sale on the market."""
     if len(args) < 2:
         await message.answer(
@@ -668,7 +731,9 @@ async def market_sell(
         try:
             pokemon_idx = int(args[0])
         except ValueError:
-            await message.answer("❌ Invalid Pokemon ID. Use a number, `l` for latest, or `0` for selected.")
+            await message.answer(
+                "❌ Invalid Pokemon ID. Use a number, `l` for latest, or `0` for selected."
+            )
             return
 
         # Get user's Pokemon by index
@@ -689,13 +754,8 @@ async def market_sell(
 
     # Parse price
     try:
-        price_str = args[1].lower().replace(",", "")
-        if price_str.endswith("k"):
-            price = int(float(price_str[:-1]) * 1000)
-        elif price_str.endswith("m"):
-            price = int(float(price_str[:-1]) * 1000000)
-        else:
-            price = int(price_str)
+        price_str = "".join(args[1:])
+        price = parse_price_string(price_str)
     except ValueError:
         await message.answer("❌ Invalid price. Use a number (supports k/m suffix).")
         return
@@ -719,8 +779,7 @@ async def market_sell(
 
     if pokemon.is_favorite:
         await message.answer(
-            f"❌ {pokemon.species.name} is favorited!\n"
-            "Unfavorite it first to sell."
+            f"❌ {pokemon.species.name} is favorited!\nUnfavorite it first to sell."
         )
         return
 
@@ -769,9 +828,7 @@ async def market_sell(
     )
 
 
-async def market_buy(
-    message: Message, session: AsyncSession, user: User, args: list
-) -> None:
+async def market_buy(message: Message, session: AsyncSession, user: User, args: list) -> None:
     """Buy a Pokemon from the market."""
     if not args:
         await message.answer(
@@ -808,8 +865,7 @@ async def market_buy(
 
     if not listing:
         await message.answer(
-            f"❌ Listing #{listing_num} not found.\n"
-            "Use /market to see available listings."
+            f"❌ Listing #{listing_num} not found.\nUse /market to see available listings."
         )
         return
 
@@ -829,9 +885,7 @@ async def market_buy(
         return
 
     # Get Pokemon
-    result = await session.execute(
-        select(Pokemon).where(Pokemon.id == listing.pokemon_id)
-    )
+    result = await session.execute(select(Pokemon).where(Pokemon.id == listing.pokemon_id))
     pokemon = result.scalar_one_or_none()
 
     if not pokemon:
@@ -839,9 +893,7 @@ async def market_buy(
         return
 
     # Get seller
-    result = await session.execute(
-        select(User).where(User.telegram_id == listing.seller_id)
-    )
+    result = await session.execute(select(User).where(User.telegram_id == listing.seller_id))
     seller = result.scalar_one_or_none()
 
     if not seller:
@@ -857,9 +909,7 @@ async def market_buy(
     )
 
     if debit_result.rowcount == 0:
-        await message.answer(
-            f"❌ Not enough {CURRENCY_SHORT}! Your balance may have changed."
-        )
+        await message.answer(f"❌ Not enough {CURRENCY_SHORT}! Your balance may have changed.")
         return
 
     await session.execute(
@@ -906,6 +956,7 @@ async def market_buy(
     # DM notify seller about the sale
     try:
         from telemon.core.notifications import notify_market_sale
+
         await notify_market_sale(
             bot=message.bot,
             seller_id=seller.telegram_id,
@@ -914,12 +965,12 @@ async def market_buy(
             buyer_name=user.display_name,
         )
     except Exception as e:
-        logger.warning("Market sale DM notification failed", error=str(e), seller_id=seller.telegram_id)
+        logger.warning(
+            "Market sale DM notification failed", error=str(e), seller_id=seller.telegram_id
+        )
 
 
-async def market_cancel(
-    message: Message, session: AsyncSession, user: User, args: list
-) -> None:
+async def market_cancel(message: Message, session: AsyncSession, user: User, args: list) -> None:
     """Cancel a user's market listing."""
     if not args:
         await message.answer(
@@ -953,9 +1004,7 @@ async def market_cancel(
     listing = user_listings[listing_num - 1]
 
     # Get Pokemon
-    result = await session.execute(
-        select(Pokemon).where(Pokemon.id == listing.pokemon_id)
-    )
+    result = await session.execute(select(Pokemon).where(Pokemon.id == listing.pokemon_id))
     pokemon = result.scalar_one_or_none()
 
     if not pokemon:
@@ -982,9 +1031,7 @@ async def market_cancel(
     )
 
 
-async def market_my_listings(
-    message: Message, session: AsyncSession, user: User
-) -> None:
+async def market_my_listings(message: Message, session: AsyncSession, user: User) -> None:
     """Show user's active listings."""
     listings = await get_user_listings(session, user.telegram_id)
 
@@ -1003,9 +1050,7 @@ async def market_my_listings(
 
     for i, listing in enumerate(listings, 1):
         # Get Pokemon
-        result = await session.execute(
-            select(Pokemon).where(Pokemon.id == listing.pokemon_id)
-        )
+        result = await session.execute(select(Pokemon).where(Pokemon.id == listing.pokemon_id))
         pokemon = result.scalar_one_or_none()
 
         if not pokemon:
@@ -1032,9 +1077,7 @@ async def market_my_listings(
     await message.answer("\n".join(lines))
 
 
-async def market_search(
-    message: Message, session: AsyncSession, args: list
-) -> None:
+async def market_search(message: Message, session: AsyncSession, args: list) -> None:
     """Search market with filters."""
     if not args:
         await message.answer(
@@ -1054,9 +1097,7 @@ async def market_search(
     await show_market(message, session, page=1, filters=filters)
 
 
-async def market_info(
-    message: Message, session: AsyncSession, args: list
-) -> None:
+async def market_info(message: Message, session: AsyncSession, args: list) -> None:
     """Show detailed info about a listing."""
     if not args:
         await message.answer(
@@ -1095,9 +1136,7 @@ async def market_info(
     await session.commit()
 
     # Get Pokemon details
-    result = await session.execute(
-        select(Pokemon).where(Pokemon.id == listing.pokemon_id)
-    )
+    result = await session.execute(select(Pokemon).where(Pokemon.id == listing.pokemon_id))
     pokemon = result.scalar_one_or_none()
 
     if not pokemon:
@@ -1105,9 +1144,7 @@ async def market_info(
         return
 
     # Get seller
-    result = await session.execute(
-        select(User).where(User.telegram_id == listing.seller_id)
-    )
+    result = await session.execute(select(User).where(User.telegram_id == listing.seller_id))
     seller = result.scalar_one_or_none()
 
     shiny = " ✨" if pokemon.is_shiny else ""
@@ -1148,11 +1185,10 @@ async def market_info(
 
 
 @router.callback_query(F.data.startswith("market:"))
-async def handle_market_callback(
-    callback: CallbackQuery, session: AsyncSession
-) -> None:
+async def handle_market_callback(callback: CallbackQuery, session: AsyncSession) -> None:
     """Handle market pagination callbacks."""
     from telemon.bot.handlers._button_owner import check_owner
+
     if not check_owner(callback.message.message_id, callback.from_user.id):
         await callback.answer("These buttons aren't for you!", show_alert=True)
         return
@@ -1174,9 +1210,7 @@ async def handle_market_callback(
         filter_str = data[3] if len(data) > 3 and data[3] else ""
         filters = MarketFilters.from_query_string(filter_str)
 
-        listings, total_count = await get_active_listings(
-            session, page=page, filters=filters
-        )
+        listings, total_count = await get_active_listings(session, page=page, filters=filters)
 
         if not listings:
             await callback.answer("No listings on this page")
@@ -1203,9 +1237,7 @@ async def handle_market_callback(
 
         keyboard = build_market_keyboard(page, total_pages, filters)
 
-        await callback.message.edit_text(
-            "\n".join(lines), reply_markup=keyboard.as_markup()
-        )
+        await callback.message.edit_text("\n".join(lines), reply_markup=keyboard.as_markup())
         await callback.answer()
 
 
