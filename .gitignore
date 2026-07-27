@@ -42,6 +42,11 @@ env/
 .env.local
 .env.*.local
 
+# Backup credentials & state — NEVER commit these
+ops/backup.env
+ops/rclone.conf
+ops/*.log
+
 # Database
 *.db
 *.sqlite3

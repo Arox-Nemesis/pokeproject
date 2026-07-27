@@ -1,10 +1,25 @@
 version: "3.8"
 
 services:
+  # Docker creates named volumes owned by root, but Postgres runs as uid 70.
+  # Without this, archive_command silently fails with "Permission denied" and
+  # pg_wal grows until the disk fills. Runs to completion before Postgres starts.
+  wal-spool-init:
+    image: postgres:16-alpine
+    container_name: telemon_wal_spool_init
+    user: root
+    volumes:
+      - wal_spool:/wal-spool
+    entrypoint: ["sh", "-c", "mkdir -p /wal-spool && chown -R 70:70 /wal-spool && chmod 750 /wal-spool && echo 'wal-spool ready'"]
+    restart: "no"
+
   # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: telemon_postgres
+    depends_on:
+      wal-spool-init:
+        condition: service_completed_successfully
     environment:
       POSTGRES_USER: telemon
       POSTGRES_PASSWORD: telemon
@@ -13,11 +28,64 @@ services:
       - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - wal_spool:/wal-spool
+    # Backup/PITR configuration. See ops/README.md.
+    #
+    # archive_command gzips, writes to a temp name, then atomically renames:
+    #   * gzip is not optional. archive_timeout forces a full 16 MB segment
+    #     every 60s even when nearly empty — that is 23 GB/day raw. Idle
+    #     segments compress to ~20 KB, turning it into ~30 MB/day.
+    #   * the temp-name + rename means the uploader can never see a
+    #     half-written segment, so it needs no min-age heuristic.
+    #   * it only ever touches the local spool, so a network outage can never
+    #     stall Postgres or make pg_wal grow without bound.
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=60
+      - -c
+      - archive_command=test ! -f /wal-spool/%f.gz && gzip -c %p > /wal-spool/.tmp.%f.gz && mv /wal-spool/.tmp.%f.gz /wal-spool/%f.gz
+      - -c
+      - wal_compression=on
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - min_wal_size=128MB
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - track_counts=on
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U telemon -d telemon"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  # WAL uploader — drains the spool to cloud object storage.
+  # Uses `rclone move` (never `sync`): it uploads, then deletes only the LOCAL
+  # copy. It issues no delete against the remote, so nothing that happens here
+  # can destroy archived history.
+  wal-uploader:
+    image: rclone/rclone:latest
+    container_name: telemon_wal_uploader
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - wal_spool:/wal-spool
+      - ./ops/rclone.conf:/config/rclone/rclone.conf:ro
+      - ./ops/wal_uploader.sh:/wal_uploader.sh:ro
+      # Single source of truth: the uploader sources the same backup.env the
+      # host scripts use, so BACKUP_REMOTES can never drift between them.
+      - ./ops/backup.env:/backup.env:ro
+    entrypoint: ["/bin/sh", "/wal_uploader.sh"]
     restart: unless-stopped
 
   # Redis Cache
@@ -55,3 +123,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  wal_spool:

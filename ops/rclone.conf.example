@@ -1,0 +1,69 @@
+# Telemon backup destinations.
+#
+#   cp ops/rclone.conf.example ops/rclone.conf   # then fill in
+#
+# This file holds cloud credentials. It is gitignored. Keep it 0600.
+#
+# =============================================================================
+# CREDENTIAL SCOPING — the most important part of this file
+# =============================================================================
+# The keys below must NOT be able to delete. If an attacker roots this server,
+# or a script goes berserk, the worst they can do to your archive is add to it.
+#
+# Backblaze B2 (recommended primary):
+#   Create an Application Key restricted to the bucket, with capabilities:
+#       listBuckets, listFiles, readFiles, writeFiles
+#   Explicitly WITHOUT: deleteFiles, deleteBucket
+#   B2 also supports Object Lock — turn it on with a 30-day retention and
+#   even a stolen admin key cannot erase recent backups.
+#
+# Cloudflare R2 (recommended secondary):
+#   Zero egress, so restore drills cost nothing. R2 API tokens are coarser
+#   than B2's, so pair the token with a bucket lifecycle policy for retention
+#   rather than relying on script-side deletes.
+#
+# readFiles is included because the restore drill has to actually read the
+# archive back. A write-only key that can never be verified is not a win.
+
+# =============================================================================
+# Backblaze B2 — primary
+# =============================================================================
+[b2]
+type = b2
+account = <B2_APPLICATION_KEY_ID>
+key = <B2_APPLICATION_KEY>
+hard_delete = false
+
+# =============================================================================
+# Cloudflare R2 — secondary
+# =============================================================================
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = <R2_ACCESS_KEY_ID>
+secret_access_key = <R2_SECRET_ACCESS_KEY>
+endpoint = https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+acl = private
+no_check_bucket = true
+
+# =============================================================================
+# OPTIONAL: client-side encryption
+# =============================================================================
+# Your users/pokemon/trades tables contain Telegram user IDs and usernames —
+# real personal data about real players. Wrapping the archive in `crypt` means
+# a leaked bucket is noise.
+#
+# Generate with:  rclone config   (choose "crypt", point remote at b2:telemon-archive)
+#
+# ⚠ STORE THE PASSWORD OUTSIDE THIS SERVER, IN A PASSWORD MANAGER, BEFORE YOU
+#   UPLOAD ANYTHING. If you lose it, every backup is permanently unrecoverable.
+#   There is no reset. This is the single easiest way to lose all your data
+#   while believing you have backups.
+#
+# [b2crypt]
+# type = crypt
+# remote = b2:telemon-archive
+# password = <obscured>
+# password2 = <obscured>
+#
+# Then set in backup.env:  BACKUP_REMOTES="b2crypt: r2crypt:"

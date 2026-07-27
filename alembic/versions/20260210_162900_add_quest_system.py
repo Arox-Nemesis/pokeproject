@@ -42,6 +42,14 @@ def upgrade() -> None:
     op.create_index(op.f('ix_user_quests_expires_at'), 'user_quests', ['expires_at'], unique=False)
     op.create_index(op.f('ix_user_quests_quest_type'), 'user_quests', ['quest_type'], unique=False)
     op.create_index(op.f('ix_user_quests_user_id'), 'user_quests', ['user_id'], unique=False)
+    op.create_table('spawn_admins',
+    sa.Column('user_id', sa.BigInteger(), nullable=False),
+    sa.Column('added_by', sa.BigInteger(), nullable=False),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.PrimaryKeyConstraint('user_id', name=op.f('pk_spawn_admins'))
+    )
     op.alter_column('spawn_admins', 'created_at',
                existing_type=postgresql.TIMESTAMP(),
                nullable=False,
@@ -63,6 +71,7 @@ def downgrade() -> None:
                existing_type=postgresql.TIMESTAMP(),
                nullable=True,
                existing_server_default=sa.text('now()'))
+    op.drop_table('spawn_admins')
     op.drop_index(op.f('ix_user_quests_user_id'), table_name='user_quests')
     op.drop_index(op.f('ix_user_quests_quest_type'), table_name='user_quests')
     op.drop_index(op.f('ix_user_quests_expires_at'), table_name='user_quests')
