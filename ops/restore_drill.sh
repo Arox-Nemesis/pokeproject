@@ -32,6 +32,19 @@ trap cleanup EXIT
 fail() { FAILURES+=("$1"); log "FAIL: $1"; }
 pass() { log "ok: $1"; }
 
+# Record the outcome for status.sh. Called on EVERY exit path, including early
+# aborts — a drill that ran and failed must never be indistinguishable from a
+# drill that never ran, which is how status.sh ends up saying "NEVER RUN" while
+# recovery is actually broken.
+record_drill() {
+  local n_fail="$1" elapsed=$(( $(date +%s) - START_EPOCH ))
+  {
+    echo "stamp=$(stamp)"
+    echo "elapsed_seconds=$elapsed"
+    echo "failures=$n_fail"
+  } > "$STATE_DIR/last_drill"
+}
+
 log "starting restore drill"
 
 # ---------------------------------------------------------------------------
@@ -55,6 +68,7 @@ if "$OPS_DIR/restore_pitr.sh" \
 else
   fail "recovery FAILED to complete — see log below"
   tail -30 "$DRILL_DIR/restore.log" | while IFS= read -r l; do log "  | $l"; done
+  record_drill 1
   alert "$(printf '🚨 TELEMON RESTORE DRILL FAILED\n\nRecovery from the cloud archive did not complete. Your backups may not be restorable RIGHT NOW.\n\nLast lines:\n%s' "$(tail -15 "$DRILL_DIR/restore.log")")"
   exit 1
 fi
@@ -126,11 +140,7 @@ fi
 # Report
 # ---------------------------------------------------------------------------
 ELAPSED=$(( $(date +%s) - START_EPOCH ))
-{
-  echo "stamp=$(stamp)"
-  echo "elapsed_seconds=$ELAPSED"
-  echo "failures=${#FAILURES[@]}"
-} > "$STATE_DIR/last_drill"
+record_drill "${#FAILURES[@]}"
 
 if [[ ${#FAILURES[@]} -eq 0 ]]; then
   log "DRILL PASSED in ${ELAPSED}s"

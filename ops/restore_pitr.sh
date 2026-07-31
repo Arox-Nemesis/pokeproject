@@ -36,8 +36,11 @@ done
 
 [[ -n "$TARGET_TIME" ]] || die "--target-time is required (an ISO timestamp, or 'latest')"
 
-# Default to the first configured remote.
-[[ -n "$REMOTE" ]] || REMOTE="$(echo "$BACKUP_REMOTES" | awk '{print $1}')"
+# Reads come from the uncapped remote (see resolve_restore_remote in lib.sh):
+# defaulting to BACKUP_REMOTES[0] would read from B2, whose free tier caps
+# downloads at 1 GB/day and reports the cap as "object not found".
+[[ -n "$REMOTE" ]] || REMOTE="$(resolve_restore_remote)"
+warn_if_download_capped "$REMOTE"
 [[ -n "$RESTORE_DIR" ]] || RESTORE_DIR="$(mktemp -d /tmp/telemon-restore-XXXXXX)"
 
 PGDATA="$RESTORE_DIR/pgdata"
@@ -80,8 +83,30 @@ log "downloading base backup..."
 rc copy "${REMOTE}/base/${CHOSEN}" "$RESTORE_DIR/" --progress || die "base download failed"
 
 log "downloading WAL segments (this is the bulk of the transfer)..."
+
+# Seed from the local retention tier first. The uploader keeps recently
+# archived segments on disk, so for any recent recovery target this supplies
+# most or all of what we need and the cloud fetch becomes a small top-up.
+# Materially lowers RTO in the case that matters most: "it broke minutes ago".
+LOCAL_SEEDED=0
+if docker volume ls -q 2>/dev/null | grep -qx "telemon_wal_retain"; then
+  log "seeding from the local WAL retention tier"
+  # postgres:16-alpine rather than alpine:latest — it is already pulled, so
+  # this adds no image dependency and works offline.
+  docker run --rm -v telemon_wal_retain:/src:ro -v "$WALDIR":/dst \
+    postgres:16-alpine sh -c 'cp -n /src/*.gz /dst/ 2>/dev/null; true' \
+    >/dev/null 2>&1 || true
+  LOCAL_SEEDED="$(find "$WALDIR" -maxdepth 1 -type f -name '*.gz' | wc -l)"
+  log "seeded $LOCAL_SEEDED segment(s) locally (no download needed for those)"
+fi
+
 rc copy "${REMOTE}/wal" "$WALDIR" --transfers 8 --checkers 16 --progress \
   || die "WAL download failed"
+
+# Retained segments are 0600 and cp preserves that, so without this the
+# restore container's postgres user (uid 70) cannot read what we just seeded
+# and recovery stalls with a confusing "could not restore file" loop.
+chmod -R a+r "$WALDIR" 2>/dev/null || true
 
 WAL_COUNT="$(find "$WALDIR" -type f -name '*.gz' | wc -l)"
 log "fetched $WAL_COUNT WAL segments"

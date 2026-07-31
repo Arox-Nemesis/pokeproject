@@ -28,10 +28,27 @@
 # =============================================================================
 # Backblaze B2 — primary
 # =============================================================================
+# TWO separate keys, because a B2 application key scoped to one bucket cannot
+# read or write another. The archive key is the security-critical one (no
+# delete); the assets key is low-stakes since artwork is re-downloadable from
+# PokeAPI.
+#
+# If you would rather keep one key, create it with "All" bucket access and use
+# it for both remotes — accepting that a compromise then reaches both buckets.
+
+# Archive: WAL, base backups, logical dumps. NO deleteFiles capability.
 [b2]
 type = b2
-account = <B2_APPLICATION_KEY_ID>
-key = <B2_APPLICATION_KEY>
+account = <B2_ARCHIVE_KEY_ID>
+key = <B2_ARCHIVE_APPLICATION_KEY>
+hard_delete = false
+
+# Assets: data/official-artwork + csv + json. Scoped to telemon-assets.
+# Referenced as `b2assets:` by ops/sync_assets.sh and ops/bootstrap.sh.
+[b2assets]
+type = b2
+account = <B2_ASSETS_KEY_ID>
+key = <B2_ASSETS_APPLICATION_KEY>
 hard_delete = false
 
 # =============================================================================

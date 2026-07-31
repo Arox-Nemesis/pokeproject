@@ -7,8 +7,19 @@
 # starting a server.
 #
 # Two modes:
-#   user   — irreplaceable tables only. Small, fast, run every 15 minutes.
-#   full   — everything including regenerable reference data. Every 6 hours.
+#   user   — irreplaceable tables only. Hourly.
+#   full   — everything including regenerable reference data. Twice daily.
+#
+# WHY NOT EVERY 15 MINUTES?
+#
+# It used to be, when the database was 12 MB and a user dump was 50 KB. After
+# the 2026-07 merge the database holds 1.06M pokemon rows and a user dump is
+# ~68 MB, so a 15-minute cadence writes 6.4 GB/day — exhausting a 10 GB free
+# tier in under two days, for almost no benefit.
+#
+# The benefit is near-zero because WAL archiving already gives 60-second RPO.
+# Logical dumps are not the recovery path; they are the version-independence
+# and single-table-restore path. Hourly is ample for that, and costs 1.6 GB/day.
 #
 # The anomaly gate runs on `user` dumps. A tripped gate does NOT suppress the
 # upload — it redirects to quarantine/ and freezes retention pruning. A guard

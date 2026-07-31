@@ -10,7 +10,8 @@ services:
     user: root
     volumes:
       - wal_spool:/wal-spool
-    entrypoint: ["sh", "-c", "mkdir -p /wal-spool && chown -R 70:70 /wal-spool && chmod 750 /wal-spool && echo 'wal-spool ready'"]
+      - wal_retain:/wal-retain
+    entrypoint: ["sh", "-c", "mkdir -p /wal-spool /wal-retain && chown -R 70:70 /wal-spool /wal-retain && chmod 750 /wal-spool /wal-retain && echo 'wal volumes ready'"]
     restart: "no"
 
   # PostgreSQL Database
@@ -80,6 +81,9 @@ services:
         condition: service_healthy
     volumes:
       - wal_spool:/wal-spool
+      # Uploaded segments are moved here rather than deleted, so the delayed
+      # standby can replay locally and a local PITR needs no download.
+      - wal_retain:/wal-retain
       - ./ops/rclone.conf:/config/rclone/rclone.conf:ro
       - ./ops/wal_uploader.sh:/wal_uploader.sh:ro
       # Single source of truth: the uploader sources the same backup.env the
@@ -124,3 +128,4 @@ volumes:
   postgres_data:
   redis_data:
   wal_spool:
+  wal_retain:

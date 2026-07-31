@@ -26,10 +26,14 @@ fi
 REMOTES="${BACKUP_REMOTES:?BACKUP_REMOTES must be set in ops/backup.env}"
 INTERVAL="${UPLOAD_INTERVAL_SECONDS:-15}"
 SPOOL_WARN_BYTES="${SPOOL_WARN_BYTES:-1073741824}"
+# Local WAL retention lives on its own volume, so the spool listing below
+# can stay a simple "everything in this directory" without tripping over it.
+RETAIN_HOURS="${LOCAL_WAL_RETAIN_HOURS:-30}"
 SPOOL=/wal-spool
+RETAIN=/wal-retain
 STATE=/wal-spool/.uploader
 
-mkdir -p "$STATE"
+mkdir -p "$STATE" "$RETAIN"
 
 log() { echo "[wal-uploader] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
 
@@ -66,8 +70,19 @@ while true; do
   if [ "$COUNT" -gt 0 ]; then
     ALL_OK=1
     for R in $REMOTES; do
+      # B2 only: rclone HEADs the destination before copying, and on B2 a HEAD
+      # is a Class B (download) transaction. Once the 1 GB/day free-tier
+      # download quota is spent, uploads start failing with "403 failed to HEAD
+      # for download" and WAL archiving silently stops. Segment names are
+      # unique, so there is nothing to check against.
+      #
+      # NOT applied to R2/S3, where it suppresses multipart uploads and yields
+      # "501 NotImplemented".
+      EXTRA=""
+      case "$R" in b2:*|*b2*) EXTRA="--no-check-dest" ;; esac
       if rclone copy "$SPOOL" "${R}/wal" \
            --files-from "$LIST" \
+           $EXTRA \
            --transfers 8 --checkers 8 \
            --no-traverse --retries 3 --low-level-retries 5 \
            --log-level NOTICE 2>&1; then
@@ -80,11 +95,17 @@ while true; do
     done
 
     if [ "$ALL_OK" -eq 1 ]; then
-      # Every remote has it. Safe to reclaim local disk.
+      # Every remote has it. Move to the local retention tier rather than
+      # deleting outright — two things depend on it:
+      #   * the time-delayed standby replays from here, so it needs no cloud
+      #     access and creates no replication slot on the primary
+      #   * a local PITR skips the download entirely (large RTO win)
+      # Pruned by age below.
+      mkdir -p "$RETAIN"
       while IFS= read -r f; do
-        [ -n "$f" ] && rm -f "$SPOOL/$f"
+        [ -n "$f" ] && mv -f "$SPOOL/$f" "$RETAIN/$f" 2>/dev/null
       done < "$LIST"
-      log "uploaded and cleared $COUNT segment(s)"
+      log "uploaded $COUNT segment(s); moved to local retention"
       rm -f "$STATE"/alert.upload_fail_* 2>/dev/null || true
     else
       log "kept $COUNT segment(s) in spool; at least one remote failed"
@@ -92,6 +113,12 @@ while true; do
   fi
 
   rm -f "$LIST"
+
+  # Prune local WAL retention by age. This tier is a convenience (delayed
+  # standby + fast local restore); the cloud archive remains authoritative, so
+  # pruning here can never cost us history.
+  find "$RETAIN" -maxdepth 1 -type f -mmin "+$((RETAIN_HOURS * 60))" \
+    -exec rm -f {} + 2>/dev/null || true
 
   # Spool backpressure warning. If this grows unbounded the disk fills and
   # archive_command starts failing, which makes pg_wal grow -> outage.

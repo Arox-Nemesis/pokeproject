@@ -15,12 +15,22 @@ QUIET=0
 PROBLEMS=()
 say() { [[ "$QUIET" -eq 1 ]] || echo -e "$*"; }
 
+# Progress markers. If this script ever hangs, the last marker written to the
+# log tells you exactly which external call wedged — without them a timeout is
+# undiagnosable. Written to stderr so --quiet still records them.
+mark() { echo "[status] >> $*" >&2; }
+
+# Every external command gets a hard ceiling. A health check that can hang is
+# worse than no health check: the timer silently stops reporting.
+dex() { timeout "${DOCKER_TIMEOUT:-15}" docker "$@" </dev/null 2>/dev/null; }
+
 say ""
 say "════════ TELEMON BACKUP STATUS ════════"
 
 # ---------------------------------------------------------------------------
 # Postgres archiver
 # ---------------------------------------------------------------------------
+mark "postgres archiver"
 if pg_running; then
   say "postgres            : running"
 
@@ -55,9 +65,10 @@ if pg_running; then
   say "archive lag         : ${LAG}s"
 
   # pg_wal growth is the canary for a stuck archiver.
-  WAL_SIZE="$(docker exec "$PG_CONTAINER" du -sm /var/lib/postgresql/data/pg_wal 2>/dev/null | cut -f1)"
+  mark "pg_wal du"
+  WAL_SIZE="$(dex exec "$PG_CONTAINER" du -sm /var/lib/postgresql/data/pg_wal | cut -f1)"
   say "pg_wal size         : ${WAL_SIZE:-?} MB"
-  if [[ -n "${WAL_SIZE:-}" && "$WAL_SIZE" -gt 4096 ]]; then
+  if [[ -n "${WAL_SIZE:-}" && "$WAL_SIZE" =~ ^[0-9]+$ && "$WAL_SIZE" -gt 4096 ]]; then
     PROBLEMS+=("pg_wal has grown to ${WAL_SIZE} MB — archiving is almost certainly stuck")
   fi
 else
@@ -68,16 +79,34 @@ fi
 # ---------------------------------------------------------------------------
 # Spool + uploader
 # ---------------------------------------------------------------------------
-if docker inspect -f '{{.State.Running}}' telemon_wal_uploader 2>/dev/null | grep -q true; then
+mark "uploader + spool"
+if dex inspect -f '{{.State.Running}}' telemon_wal_uploader | grep -q true; then
   say "wal-uploader        : running"
-  SPOOL_N="$(docker exec telemon_wal_uploader sh -c 'ls -1 /wal-spool 2>/dev/null | grep -v "^\." | wc -l' 2>/dev/null || echo '?')"
-  say "spool backlog       : ${SPOOL_N} segment(s)"
-  if [[ "$SPOOL_N" != "?" && "$SPOOL_N" -gt 60 ]]; then
-    PROBLEMS+=("$SPOOL_N segments are stuck in the local spool — uploads are failing or too slow")
-  fi
 else
   PROBLEMS+=("wal-uploader container is not running — segments are spooling locally and NOT reaching the cloud")
   say "wal-uploader        : NOT RUNNING"
+fi
+
+# Measured via the POSTGRES container, not the uploader. The spool only grows
+# without bound when the uploader is DOWN, so checking it through the uploader
+# meant the metric vanished at exactly the moment it started to matter.
+if pg_running; then
+  mark "spool count"
+  # `grep -v | wc -l`, not `grep -vc`: grep -vc exits 1 on a zero count, which
+  # would make the `|| echo '?'` fallback append to the real value.
+  SPOOL_N="$(dex exec "$PG_CONTAINER" sh -c 'ls -1 /wal-spool 2>/dev/null | grep -v "^\." | wc -l' || echo '?')"
+  mark "spool du"
+  SPOOL_MB="$(dex exec "$PG_CONTAINER" du -sm /wal-spool | cut -f1 || echo '?')"
+  SPOOL_N="$(echo "$SPOOL_N" | tr -d ' \n')"
+  SPOOL_MB="$(echo "$SPOOL_MB" | tr -d ' \n')"
+  say "spool backlog       : ${SPOOL_N:-?} segment(s), ${SPOOL_MB:-?} MB"
+  if [[ "${SPOOL_N:-?}" =~ ^[0-9]+$ && "$SPOOL_N" -gt 60 ]]; then
+    PROBLEMS+=("$SPOOL_N WAL segments (${SPOOL_MB:-?} MB) are stuck in the local spool and have NOT reached any cloud remote. They are safe on this disk for now, but this is single-copy data and the spool will grow until the disk fills.")
+  fi
+  AVAIL_MB="$(df -Pm / 2>/dev/null | awk 'NR==2{print $4}')"
+  if [[ -n "${AVAIL_MB:-}" && "$AVAIL_MB" =~ ^[0-9]+$ && "$AVAIL_MB" -lt 5120 ]]; then
+    PROBLEMS+=("only ${AVAIL_MB} MB free on / — if this reaches zero, archive_command fails, pg_wal grows and Postgres stops accepting writes")
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -89,6 +118,7 @@ rcfast() { timeout 25 rclone --config "$RCLONE_CONF" \
              --timeout 10s --contimeout 5s --retries 1 --low-level-retries 1 "$@"; }
 
 for R in $BACKUP_REMOTES; do
+  mark "remote $R"
   say ""
   say "── remote: $R"
   if ! rcfast lsjson "${R}/base" --max-depth 1 >/dev/null 2>&1; then
@@ -131,15 +161,52 @@ done
 # restore, and alembic_version matching HEAD does not prove the schema matches
 # the models. Checked here so drift surfaces hourly rather than at recovery time.
 say ""
-if docker inspect -f '{{.State.Running}}' "${BOT_CONTAINER:-telemon_bot}" 2>/dev/null | grep -q true; then
-  if DRIFT_OUT="$("$OPS_DIR/check_drift.sh" --quiet 2>&1)"; then
+mark "schema drift"
+if dex inspect -f '{{.State.Running}}' "${BOT_CONTAINER:-telemon_bot}" | grep -q true; then
+  # Bounded: this imports SQLAlchemy and every model inside the bot container,
+  # which is the slowest single call in this script.
+  # `|| DRC=$?` keeps the assignment non-fatal under `set -e` while still
+  # capturing the real exit code (checking $? inside elif is unreliable).
+  DRC=0
+  DRIFT_OUT="$(timeout 60 "$OPS_DIR/check_drift.sh" --quiet 2>&1)" || DRC=$?
+  if [[ "$DRC" -eq 0 ]]; then
     say "schema drift        : none"
+  elif [[ "$DRC" -eq 124 ]]; then
+    say "schema drift        : TIMED OUT"
+    PROBLEMS+=("the schema drift check timed out after 60s — run ops/check_drift.sh directly to see why")
   else
     say "schema drift        : ⚠ DETECTED"
     PROBLEMS+=("schema drift: $(echo "$DRIFT_OUT" | grep 'DRIFT:' | head -3 | sed 's/^ *DRIFT: //' | paste -sd'; ')")
   fi
 else
   say "schema drift        : skipped (bot container not running)"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 2 summary (delegated — these have their own dedicated timers)
+# ---------------------------------------------------------------------------
+say ""
+mark "tier 2"
+if [[ -n "${MIRROR_URL:-}" ]] || [[ "$(psql_q "SELECT count(*) FROM pg_publication;" 2>/dev/null || echo 0)" != "0" ]]; then
+  if timeout 60 "$OPS_DIR/mirror_status.sh" --quiet >/dev/null 2>&1; then
+    say "warm mirror         : healthy"
+  else
+    say "warm mirror         : ⚠ PROBLEM (see ops/mirror_status.sh)"
+    PROBLEMS+=("the warm mirror reports problems — run ops/mirror_status.sh. If a replication slot is inactive it is retaining WAL on this primary and will eventually fill the disk.")
+  fi
+else
+  say "warm mirror         : not configured"
+fi
+
+if dex inspect -f '{{.State.Running}}' "${STANDBY_CONTAINER:-telemon_standby}" | grep -q true; then
+  if timeout 60 "$OPS_DIR/standby_status.sh" --quiet >/dev/null 2>&1; then
+    say "delayed standby     : healthy"
+  else
+    say "delayed standby     : ⚠ PROBLEM (see ops/standby_status.sh)"
+    PROBLEMS+=("the delayed standby reports problems — it may have stalled, which means it is NOT the recovery option you think it is")
+  fi
+else
+  say "delayed standby     : not running"
 fi
 
 # ---------------------------------------------------------------------------
