@@ -29,6 +29,7 @@ from telemon.database.models import (
     User,
 )
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="market")
 logger = get_logger(__name__)
@@ -503,7 +504,7 @@ async def format_listing(
     # Get seller info
     seller_result = await session.execute(select(User).where(User.telegram_id == listing.seller_id))
     seller = seller_result.scalar_one_or_none()
-    seller_name = seller.display_name if seller else f"User {listing.seller_id}"
+    seller_name = esc(seller.display_name) if seller else f"User {listing.seller_id}"
 
     shiny = " ✨" if pokemon.is_shiny else ""
     iv_pct = pokemon.iv_percentage
@@ -948,7 +949,7 @@ async def market_buy(message: Message, session: AsyncSession, user: User, args: 
         f"You bought <b>{pokemon.species.name}</b>{shiny} Lv.{pokemon.level}\n"
         f"IV: {pokemon.iv_percentage:.1f}%\n"
         f"Price: {listing.price:,} {CURRENCY_SHORT}\n\n"
-        f"Seller: {seller.display_name}\n"
+        f"Seller: {esc(seller.display_name)}\n"
         f"Your new balance: {user.balance:,} {CURRENCY_SHORT}\n\n"
         f"<i>Use /pokemon to see your new Pokemon!</i>"
     )
@@ -1177,7 +1178,7 @@ async def market_info(message: Message, session: AsyncSession, args: list) -> No
         f"<b>IVs ({pokemon.iv_percentage:.1f}%)</b>\n"
         f"{iv_line}\n\n"
         f"<b>Price:</b> {listing.price:,} {CURRENCY_SHORT}\n"
-        f"<b>Seller:</b> {seller.display_name if seller else 'Unknown'}\n"
+        f"<b>Seller:</b> {esc(seller.display_name) if seller else 'Unknown'}\n"
         f"<b>Views:</b> {listing.view_count}\n"
         f"<b>Expires in:</b> {time_str}\n\n"
         f"<i>Use /market buy {listing_num} to purchase</i>"

@@ -30,6 +30,7 @@ from telemon.core.teams import (
 )
 from telemon.database.models import User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="team")
 logger = get_logger(__name__)
@@ -166,7 +167,7 @@ async def _show_team_info(message: Message, session: AsyncSession, user: User) -
         bar = _xp_bar(team.xp, next_xp)
 
     lines = [
-        f"<b>[{team.tag}] {team.name}</b>",
+        f"<b>[{esc(team.tag)}] {esc(team.name)}</b>",
         "",
         f"Level: {team.level} / {MAX_TEAM_LEVEL}",
         f"{xp_line}",
@@ -178,7 +179,7 @@ async def _show_team_info(message: Message, session: AsyncSession, user: User) -
     ]
 
     if team.description:
-        lines.insert(1, f"<i>{team.description}</i>")
+        lines.insert(1, f"<i>{esc(team.description)}</i>")
 
     lines.append(f"\nYour role: {_role_display(user.team_role)}")
 
@@ -215,7 +216,7 @@ async def _show_team_by_tag(message: Message, session: AsyncSession, tag: str) -
         bar = _xp_bar(t.xp, next_xp)
 
     lines = [
-        f"<b>[{t.tag}] {t.name}</b>",
+        f"<b>[{esc(t.tag)}] {esc(t.name)}</b>",
         "",
         f"Level: {t.level} / {MAX_TEAM_LEVEL}",
         f"{xp_line}",
@@ -227,7 +228,7 @@ async def _show_team_by_tag(message: Message, session: AsyncSession, tag: str) -
     ]
 
     if t.description:
-        lines.insert(1, f"<i>{t.description}</i>")
+        lines.insert(1, f"<i>{esc(t.description)}</i>")
 
     await message.answer("\n".join(lines))
 
@@ -267,9 +268,9 @@ async def _team_create(
     await session.refresh(user)
 
     await message.answer(
-        f"Team <b>[{team.tag}] {team.name}</b> created!\n\n"
+        f"Team <b>[{esc(team.tag)}] {esc(team.name)}</b> created!\n\n"
         f"You are the leader. Others can join with:\n"
-        f"<code>/team join {team.tag}</code>"
+        f"<code>/team join {esc(team.tag)}</code>"
     )
 
 
@@ -289,7 +290,7 @@ async def _team_join(
 
     await session.refresh(user)
     await message.answer(
-        f"You joined <b>[{team.tag}] {team.name}</b>!\n"
+        f"You joined <b>[{esc(team.tag)}] {esc(team.name)}</b>!\n"
         f"Welcome to the team."
     )
 
@@ -436,11 +437,11 @@ async def _build_members_page(
     total_pages = max(1, (total + MEMBERS_PER_PAGE - 1) // MEMBERS_PER_PAGE)
     page = max(1, min(page, total_pages))
 
-    lines = [f"<b>[{team.tag}] {team.name} — Members</b>  ({page}/{total_pages})\n"]
+    lines = [f"<b>[{esc(team.tag)}] {esc(team.name)} — Members</b>  ({page}/{total_pages})\n"]
 
     for m in members:
         emoji = ROLE_EMOJI.get(m.team_role or "member", "👤")
-        lines.append(f"{emoji} {m.display_name}")
+        lines.append(f"{emoji} {esc(m.display_name)}")
 
     lines.append(f"\nTotal: {total} / {team.max_members}")
 
@@ -515,7 +516,7 @@ async def _build_team_list_page(
         t = entry["team"]
         mc = entry["member_count"]
         lines.append(
-            f"{i}. <b>[{t.tag}]</b> {t.name}  "
+            f"{i}. <b>[{esc(t.tag)}]</b> {esc(t.name)}  "
             f"Lv{t.level}  ({mc}/{t.max_members})"
         )
 

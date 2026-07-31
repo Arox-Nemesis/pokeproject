@@ -12,6 +12,7 @@ from telemon.bot.handlers import (
     leaderboard,
     market,
     mega,
+    migration,
     moves,
     pokedex,
     pokemon,
@@ -72,6 +73,9 @@ def register_all_handlers(dp: Dispatcher) -> None:
 
     # Runtime restart/rebuild (owner-only)
     dp.include_router(runtime.router)
+
+    # Chat migration service messages (before the catch-all spawn router)
+    dp.include_router(migration.router)
 
     # Spawn handler (MUST be last - catches all group messages)
     dp.include_router(spawn.router)

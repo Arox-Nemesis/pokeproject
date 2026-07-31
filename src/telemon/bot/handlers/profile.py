@@ -13,6 +13,7 @@ from telemon.core.constants import MAX_FRIENDSHIP, MAX_LEVEL, MAX_GIFT_AMOUNT
 from telemon.core.emoji import poke_emoji
 from telemon.database.models import PokedexEntry, Pokemon, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="profile")
 logger = get_logger(__name__)
@@ -53,11 +54,11 @@ async def cmd_profile(message: Message, session: AsyncSession, user: User) -> No
         if sel_poke:
             shiny_mark = " ✨" if sel_poke.is_shiny else ""
             sprite = poke_emoji(sel_poke.species.national_dex)
-            selected_text = f"{sprite}{sel_poke.display_name}{shiny_mark} Lv.{sel_poke.level} | Friendship: {sel_poke.friendship}/{MAX_FRIENDSHIP}"
+            selected_text = f"{sprite}{esc(sel_poke.display_name)}{shiny_mark} Lv.{sel_poke.level} | Friendship: {sel_poke.friendship}/{MAX_FRIENDSHIP}"
 
     profile_text = (
         f"<b>Trainer Profile</b>\n\n"
-        f"<b>Name:</b> {user.display_name}\n"
+        f"<b>Name:</b> {esc(user.display_name)}\n"
         f"<b>Balance:</b> {user.balance:,} {CURRENCY_NAME}\n\n"
         f"<b>Pokemon Stats</b>\n"
         f"  Total: {pokemon_count} | Unique: {unique_caught} | Shinies: {shiny_count}\n\n"
@@ -128,7 +129,7 @@ async def cmd_daily(message: Message, session: AsyncSession, user: User) -> None
             old = sel_poke.friendship
             sel_poke.friendship = min(MAX_FRIENDSHIP, sel_poke.friendship + gain)
             actual = sel_poke.friendship - old
-            friendship_text = f"\n{sel_poke.display_name}: +{actual} friendship ({sel_poke.friendship}/{MAX_FRIENDSHIP})"
+            friendship_text = f"\n{esc(sel_poke.display_name)}: +{actual} friendship ({sel_poke.friendship}/{MAX_FRIENDSHIP})"
 
         # XP from daily claim
         if sel_poke and sel_poke.level < MAX_LEVEL:
@@ -139,7 +140,7 @@ async def cmd_daily(message: Message, session: AsyncSession, user: User) -> None
                 session, str(sel_poke.id), daily_xp
             )
             if xp_added > 0:
-                daily_xp_text = "\n" + format_xp_message(sel_poke.display_name, xp_added, levels_gained, learned_moves)
+                daily_xp_text = "\n" + format_xp_message(esc(sel_poke.display_name), xp_added, levels_gained, learned_moves)
 
     await session.commit()
 
@@ -195,7 +196,7 @@ async def cmd_gift(message: Message, session: AsyncSession, user: User) -> None:
     # Check if replying to someone
     if message.reply_to_message and message.reply_to_message.from_user:
         target_telegram_id = message.reply_to_message.from_user.id
-        target_name = message.reply_to_message.from_user.first_name or "Unknown"
+        target_name = esc(message.reply_to_message.from_user.first_name or "Unknown")
         # Amount is the second arg when replying
         try:
             amount = int(args[1])
@@ -222,12 +223,12 @@ async def cmd_gift(message: Message, session: AsyncSession, user: User) -> None:
             target_user = result.scalar_one_or_none()
             if not target_user:
                 await message.answer(
-                    f"User @{username} not found.\n"
+                    f"User @{esc(username)} not found.\n"
                     "They need to use /start first!"
                 )
                 return
             target_telegram_id = target_user.telegram_id
-            target_name = target_user.display_name
+            target_name = esc(target_user.display_name)
         elif target_ref.isdigit():
             target_telegram_id = int(target_ref)
             result = await session.execute(
@@ -237,7 +238,7 @@ async def cmd_gift(message: Message, session: AsyncSession, user: User) -> None:
             if not target_user:
                 await message.answer("User not found!")
                 return
-            target_name = target_user.display_name
+            target_name = esc(target_user.display_name)
         else:
             await message.answer(
                 "Invalid user! Use @username or reply to their message.\n"
@@ -263,7 +264,7 @@ async def cmd_gift(message: Message, session: AsyncSession, user: User) -> None:
         if not target_user:
             await message.answer("User not found! They need to use /start first.")
             return
-        target_name = target_user.display_name
+        target_name = esc(target_user.display_name)
 
     if target_user.telegram_id == user.telegram_id:
         await message.answer("You can't gift yourself!")

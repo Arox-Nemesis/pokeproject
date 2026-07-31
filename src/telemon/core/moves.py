@@ -5,13 +5,37 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from telemon.core import forms, regional
 from telemon.database.models import Pokemon
 from telemon.database.models.move import Move, PokemonLearnset
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 logger = get_logger(__name__)
 
 MAX_MOVES = 4
+
+
+def learnset_species_id(species_id: int) -> int:
+    """Map a species id to the id its learnset rows are stored under.
+
+    ``pokemon_learnsets`` only covers dex < 10000, so every alternate form
+    (regional variants and Megas) has to fall back to its base species or it
+    would know no moves at all and could never learn any.
+    """
+    if species_id < 10000:
+        return species_id
+
+    base = regional.get_base_dex(species_id)
+    if base != species_id:
+        return base
+
+    mega = forms.get_base_species_for_mega_dex(species_id)
+    if mega:
+        return mega[0]
+
+    logger.warning("No learnset fallback for alternate form", species_id=species_id)
+    return species_id
 
 
 async def get_move_by_name(session: AsyncSession, name: str) -> Move | None:
@@ -50,7 +74,7 @@ async def get_learnable_moves(
     result = await session.execute(
         select(PokemonLearnset, Move)
         .join(Move, Move.id == PokemonLearnset.move_id)
-        .where(PokemonLearnset.species_id == species_id)
+        .where(PokemonLearnset.species_id == learnset_species_id(species_id))
         .where(PokemonLearnset.learn_method == "level-up")
         .where(PokemonLearnset.level_learned <= max_level)
         .order_by(PokemonLearnset.level_learned)
@@ -66,7 +90,7 @@ async def get_moves_at_level(
     result = await session.execute(
         select(Move)
         .join(PokemonLearnset, PokemonLearnset.move_id == Move.id)
-        .where(PokemonLearnset.species_id == species_id)
+        .where(PokemonLearnset.species_id == learnset_species_id(species_id))
         .where(PokemonLearnset.learn_method == "level-up")
         .where(PokemonLearnset.level_learned == level)
     )
@@ -169,24 +193,24 @@ async def learn_move(
     # Check if move exists
     move = await get_move_by_name(session, move_name)
     if not move:
-        return False, f"Move '{move_name}' not found."
+        return False, f"Move '{esc(move_name)}' not found."
 
     # Check if species can learn this move
     result = await session.execute(
         select(PokemonLearnset)
-        .where(PokemonLearnset.species_id == pokemon.species_id)
+        .where(PokemonLearnset.species_id == learnset_species_id(pokemon.species_id))
         .where(PokemonLearnset.move_id == move.id)
     )
     learnset_entry = result.scalar_one_or_none()
 
     if not learnset_entry:
-        return False, f"{pokemon.display_name} can't learn {move.name}!"
+        return False, f"{esc(pokemon.display_name)} can't learn {move.name}!"
 
     # Check level requirement for level-up moves
     if learnset_entry.learn_method == "level-up" and learnset_entry.level_learned:
         if pokemon.level < learnset_entry.level_learned:
             return False, (
-                f"{pokemon.display_name} needs to be Lv.{learnset_entry.level_learned} "
+                f"{esc(pokemon.display_name)} needs to be Lv.{learnset_entry.level_learned} "
                 f"to learn {move.name} (currently Lv.{pokemon.level})."
             )
 
@@ -194,16 +218,16 @@ async def learn_move(
 
     # Already knows this move?
     if move.name_lower in [m.lower() for m in current_moves]:
-        return False, f"{pokemon.display_name} already knows {move.name}!"
+        return False, f"{esc(pokemon.display_name)} already knows {move.name}!"
 
     # Has room?
     if len(current_moves) < MAX_MOVES:
         current_moves.append(move.name_lower)
         pokemon.moves = current_moves
-        return True, f"{pokemon.display_name} learned {move.name}!"
+        return True, f"{esc(pokemon.display_name)} learned {move.name}!"
     else:
         return False, (
-            f"{pokemon.display_name} already knows {MAX_MOVES} moves!\n"
+            f"{esc(pokemon.display_name)} already knows {MAX_MOVES} moves!\n"
             f"Use /forget [move] first to make room."
         )
 
@@ -215,7 +239,7 @@ async def forget_move(
     current_moves = list(pokemon.moves or [])
 
     if not current_moves:
-        return False, f"{pokemon.display_name} doesn't know any moves!"
+        return False, f"{esc(pokemon.display_name)} doesn't know any moves!"
 
     # Find the move (case-insensitive)
     target_lower = move_name.lower()
@@ -238,9 +262,9 @@ async def forget_move(
 
     if found_idx is None:
         known = ", ".join(current_moves)
-        return False, f"{pokemon.display_name} doesn't know '{move_name}'.\nKnown moves: {known}"
+        return False, f"{esc(pokemon.display_name)} doesn't know '{esc(move_name)}'.\nKnown moves: {known}"
 
     current_moves.pop(found_idx)
     pokemon.moves = current_moves
 
-    return True, f"{pokemon.display_name} forgot {found_name}!"
+    return True, f"{esc(pokemon.display_name)} forgot {found_name}!"

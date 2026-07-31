@@ -16,6 +16,7 @@ from telemon.core.evolution import check_evolution, evolve_pokemon
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.database.models.trade import Trade, TradeHistory, TradeStatus
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="trade")
 logger = get_logger(__name__)
@@ -70,8 +71,8 @@ async def format_trade_status(session: AsyncSession, trade: Trade) -> str:
     )
     user2 = user2_result.scalar_one_or_none()
 
-    user1_name = user1.username or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
-    user2_name = user2.username or f"User {trade.user2_id}" if user2 else f"User {trade.user2_id}"
+    user1_name = esc(user1.username) or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
+    user2_name = esc(user2.username) or f"User {trade.user2_id}" if user2 else f"User {trade.user2_id}"
 
     # Get Pokemon details
     user1_pokemon = []
@@ -215,7 +216,7 @@ async def start_trade(
 
     if not target_user:
         await message.answer(
-            f" User @{target_username} not found.\n"
+            f" User @{esc(target_username)} not found.\n"
             "They need to /start the bot first."
         )
         return
@@ -228,7 +229,7 @@ async def start_trade(
     target_trade = await get_active_trade(session, target_user.telegram_id)
     if target_trade:
         await message.answer(
-            f" @{target_username} is already in a trade session."
+            f" @{esc(target_username)} is already in a trade session."
         )
         return
 
@@ -259,8 +260,8 @@ async def start_trade(
 
     await message.answer(
         f"📨 <b>Trade Request Sent!</b>\n\n"
-        f"@{user.username or 'You'} wants to trade with @{target_username}\n\n"
-        f"@{target_username} — use the buttons below or /trade accept / /trade reject\n"
+        f"@{esc(user.username or 'You')} wants to trade with @{esc(target_username)}\n\n"
+        f"@{esc(target_username)} — use the buttons below or /trade accept / /trade reject\n"
         "<i>⏳ This request expires in 5 minutes</i>",
         reply_markup=builder.as_markup(),
     )
@@ -316,7 +317,7 @@ async def start_trade_by_id(
     session.add(trade)
     await session.commit()
 
-    target_name = target_user.username or f"User {target_id}"
+    target_name = esc(target_user.username) or f"User {target_id}"
 
     logger.info(
         "Trade invite sent",
@@ -571,7 +572,7 @@ async def trade_accept(message: Message, session: AsyncSession, user: User) -> N
         select(User).where(User.telegram_id == invite.user1_id)
     )
     user1 = user1_result.scalar_one_or_none()
-    user1_name = user1.username or f"User {invite.user1_id}" if user1 else f"User {invite.user1_id}"
+    user1_name = esc(user1.username) or f"User {invite.user1_id}" if user1 else f"User {invite.user1_id}"
 
     logger.info(
         "Trade accepted",
@@ -582,7 +583,7 @@ async def trade_accept(message: Message, session: AsyncSession, user: User) -> N
 
     await message.answer(
         f"✅ <b>Trade Accepted!</b>\n\n"
-        f"@{user.username or 'You'} accepted the trade with @{user1_name}\n\n"
+        f"@{esc(user.username or 'You')} accepted the trade with @{user1_name}\n\n"
         "Use /trade add [pokemon_id] to add Pokemon\n"
         f"Use /trade coins [amount] to add {CURRENCY_NAME}\n"
         "Use /trade confirm when ready\n"
@@ -605,7 +606,7 @@ async def trade_reject(message: Message, session: AsyncSession, user: User) -> N
         select(User).where(User.telegram_id == invite.user1_id)
     )
     user1 = user1_result.scalar_one_or_none()
-    user1_name = user1.username or f"User {invite.user1_id}" if user1 else f"User {invite.user1_id}"
+    user1_name = esc(user1.username) or f"User {invite.user1_id}" if user1 else f"User {invite.user1_id}"
 
     logger.info(
         "Trade rejected",
@@ -778,8 +779,8 @@ async def execute_trade(message: Message, session: AsyncSession, trade: Trade) -
         await session.commit()
 
         # Build completion message
-        user1_name = user1.username or f"User {trade.user1_id}"
-        user2_name = user2.username or f"User {trade.user2_id}"
+        user1_name = esc(user1.username) or f"User {trade.user1_id}"
+        user2_name = esc(user2.username) or f"User {trade.user2_id}"
 
         response = (
             f" <b>Trade Complete!</b>\n\n"
@@ -822,7 +823,7 @@ async def execute_trade(message: Message, session: AsyncSession, trade: Trade) -
                     )
                     poke = poke_r.scalar_one_or_none()
                     if poke:
-                        response += f"\n{poke.display_name} leveled up to Lv.{poke.level}!"
+                        response += f"\n{esc(poke.display_name)} leveled up to Lv.{poke.level}!"
         await session.commit()
 
         # Achievement hooks for trade
@@ -838,8 +839,8 @@ async def execute_trade(message: Message, session: AsyncSession, trade: Trade) -
         logger.error("Error in post-trade processing", error=str(e), exc_info=True)
         # Fallback response if not built yet or if error occurred
         if 'response' not in locals():
-            user1_name = user1.username or f"User {trade.user1_id}"
-            user2_name = user2.username or f"User {trade.user2_id}"
+            user1_name = esc(user1.username) or f"User {trade.user1_id}"
+            user2_name = esc(user2.username) or f"User {trade.user2_id}"
             response = (
                 f" <b>Trade Complete!</b>\n\n"
                 f"@{user1_name}  @{user2_name}\n\n"
@@ -931,7 +932,7 @@ async def callback_trade_accept(
         select(User).where(User.telegram_id == trade.user1_id)
     )
     user1 = user1_result.scalar_one_or_none()
-    user1_name = user1.username or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
+    user1_name = esc(user1.username) or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
 
     logger.info(
         "Trade accepted via button",
@@ -942,7 +943,7 @@ async def callback_trade_accept(
 
     await callback.message.edit_text(
         f"✅ <b>Trade Accepted!</b>\n\n"
-        f"@{user.username or 'You'} accepted the trade with @{user1_name}\n\n"
+        f"@{esc(user.username or 'You')} accepted the trade with @{user1_name}\n\n"
         "Use /trade add [pokemon_id] to add Pokemon\n"
         f"Use /trade coins [amount] to add {CURRENCY_NAME}\n"
         "Use /trade confirm when ready\n"
@@ -986,7 +987,7 @@ async def callback_trade_reject(
         select(User).where(User.telegram_id == trade.user1_id)
     )
     user1 = user1_result.scalar_one_or_none()
-    user1_name = user1.username or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
+    user1_name = esc(user1.username) or f"User {trade.user1_id}" if user1 else f"User {trade.user1_id}"
 
     logger.info(
         "Trade rejected via button",

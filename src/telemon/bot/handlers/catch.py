@@ -5,14 +5,17 @@ from datetime import datetime, timedelta
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import CURRENCY_NAME, CURRENCY_SHORT
+from telemon.core import regional, shiny
 from telemon.core.constants import NATURES, MAX_IV, MAX_IV_TOTAL, MAX_LEVEL, MAX_FRIENDSHIP, CATCH_LEVEL_MIN, CATCH_LEVEL_MAX, determine_gender, iv_percentage, random_nature
 from telemon.core.emoji import poke_emoji
+from telemon.core.shiny import has_shiny_charm
 from telemon.database.models import ActiveSpawn, Group, Pokemon, PokedexEntry, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="catch")
 logger = get_logger(__name__)
@@ -116,8 +119,22 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     # Check exact match (normalized — strips hyphens/spaces)
     name_matches = _normalize(pokemon_name) == _normalize(actual_name)
 
-    # Also check base-name match for form Pokemon
-    if not name_matches:
+    if not name_matches and regional.is_regional(spawn.species_id):
+        # Regional forms are named "<region> <base>", so splitting on the space
+        # would yield the region ("alolan") as the base name.  Accept the full
+        # name, the region-less name ("vulpix"), and any region alias
+        # ("alola vulpix"), but never a bare region word.
+        form = regional.get_form(spawn.species_id)
+        accepted = {_normalize(actual_name), _normalize(form.short_name)}
+        # "paldean tauros" for any of the three breeds.
+        accepted.add(_normalize(form.short_name.split(" (")[0]))
+        for alias, canonical in regional.REGION_ALIASES.items():
+            if canonical == form.region:
+                accepted.add(_normalize(f"{alias} {form.short_name}"))
+                accepted.add(_normalize(f"{alias} {form.short_name.split(' (')[0]}"))
+        name_matches = _normalize(pokemon_name) in accepted
+    elif not name_matches:
+        # Also check base-name match for form Pokemon
         base = _get_base_name(actual_name)
         if base:
             name_matches = _normalize(pokemon_name) == _normalize(base)
@@ -128,6 +145,21 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
             f" That's not the right Pokemon!\n"
             f"Use /hint if you need help identifying it."
         )
+        return
+
+    # Claim the spawn atomically.  The SELECT above only proves the spawn was
+    # unclaimed when we read it; two /catch messages arriving together would
+    # both pass it and both create a Pokemon.  A conditional UPDATE lets the
+    # database pick exactly one winner.
+    claim = await session.execute(
+        update(ActiveSpawn)
+        .where(ActiveSpawn.id == spawn.id)
+        .where(ActiveSpawn.caught_by.is_(None))
+        .values(caught_by=user.telegram_id, caught_at=datetime.utcnow())
+        .returning(ActiveSpawn.id)
+    )
+    if claim.scalar_one_or_none() is None:
+        await message.answer(" Too slow! Someone else caught it first.")
         return
 
     # Successful catch!
@@ -157,6 +189,18 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     # Determine level (use forced level from admin spawn if present)
     catch_level = spawn.force_level if spawn.force_level is not None else random.randint(CATCH_LEVEL_MIN, CATCH_LEVEL_MAX)
 
+    # Shiny hunt payoff.  The spawn's shiny flag was rolled at base odds before
+    # any catcher was known, so an active hunt on this species gets a second
+    # conditional roll here that lifts the catcher's end-to-end odds to exactly
+    # what /hunt advertises.  Nobody's odds get worse, and only the catcher's
+    # own chain and charm count.
+    is_shiny = spawn.is_shiny
+    if not is_shiny and user.shiny_hunt_species_id == spawn.species_id:
+        has_charm = await has_shiny_charm(session, user.telegram_id)
+        bonus = shiny.bonus_probability(user.shiny_hunt_chain, has_charm)
+        if bonus > 0 and random.random() < bonus:
+            is_shiny = True
+
     # Create the Pokemon
     new_pokemon = Pokemon(
         id=uuid.uuid4(),
@@ -171,15 +215,16 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
         iv_speed=ivs["speed"],
         nature=nature,
         ability=ability,
-        is_shiny=spawn.is_shiny,
+        is_shiny=is_shiny,
         gender=gender,
         original_trainer_id=user.telegram_id,
         caught_in_group_id=chat_id,
+        form=regional.get_form(spawn.species_id).region
+        if regional.is_regional(spawn.species_id)
+        else None,
     )
 
-    # Mark spawn as caught
-    spawn.caught_by = user.telegram_id
-    spawn.caught_at = datetime.utcnow()
+    # Spawn was already marked caught by the atomic claim above.
 
     # Rewards — only from new dex entries, milestones, and quests
     reward = 0
@@ -197,7 +242,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
     if pokedex_entry:
         pokedex_entry.caught = True
         pokedex_entry.times_caught += 1
-        if spawn.is_shiny:
+        if is_shiny:
             pokedex_entry.caught_shiny = True
 
         # Milestone bonuses
@@ -216,7 +261,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
             species_id=spawn.species_id,
             seen=True,
             caught=True,
-            caught_shiny=spawn.is_shiny,
+            caught_shiny=is_shiny,
             times_caught=1,
             first_caught_at=datetime.utcnow(),
         )
@@ -258,7 +303,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
                 session, user.telegram_id, "catch_type", params={"type": ptype.lower()}
             )
         # Shiny catch quest
-        if spawn.is_shiny:
+        if is_shiny:
             completed += await update_quest_progress(session, user.telegram_id, "catch_shiny")
         if completed:
             await session.commit()
@@ -280,7 +325,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
                 # Correct species - increment chain
                 user.shiny_hunt_chain += 1
                 chain_msg = f"\n🔗 Chain: {user.shiny_hunt_chain}"
-                if spawn.is_shiny:
+                if is_shiny:
                     chain_msg += " ✨ SHINY FOUND!"
             else:
                 # Wrong species - break chain
@@ -314,13 +359,13 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
                     session, str(sel_poke.id), catch_xp
                 )
                 if xp_added > 0:
-                    xp_msg = "\n" + format_xp_message(sel_poke.display_name, xp_added, levels_gained, learned_moves)
+                    xp_msg = "\n" + format_xp_message(esc(sel_poke.display_name), xp_added, levels_gained, learned_moves)
 
         # Achievement checks
         from telemon.core.achievements import check_achievements, format_achievement_notification
 
         ach_events = ["catch"]
-        if spawn.is_shiny:
+        if is_shiny:
             ach_events.append("catch_shiny")
         if iv_percent >= 100.0:
             ach_events.append("catch_perfect")
@@ -348,7 +393,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
         # We continue to send the success message even if secondary updates failed
 
     # Build response message
-    shiny_text = " ✨ " if spawn.is_shiny else ""
+    shiny_text = " ✨ " if is_shiny else ""
 
     # IV quality rating
     if iv_percent >= 90:
@@ -364,7 +409,7 @@ async def cmd_catch(message: Message, session: AsyncSession, user: User) -> None
 
     sprite = poke_emoji(spawn.species.national_dex)
     msg_lines = [
-        f"<b>Congratulations {user.display_name}!</b> You caught a level {new_pokemon.level}{shiny_text}{sprite}<b>{spawn.species.name}</b>! (IV: {iv_percent:.2f}%)",
+        f"<b>Congratulations {esc(user.display_name)}!</b> You caught a level {new_pokemon.level}{shiny_text}{sprite}<b>{spawn.species.name}</b>! (IV: {iv_percent:.2f}%)",
         # f"IVs: {iv_percent}% ({iv_rating})",
     ]
 
@@ -458,8 +503,15 @@ async def cmd_hint(message: Message, session: AsyncSession, user: User) -> None:
         for k in expired:
             del _hint_cooldowns[k]
 
-    # Generate hint
-    hint = generate_hint(spawn.species.name, spawn.hints_used)
+    # Generate hint.  For a regional form the region is given away for free and
+    # only the species part is masked -- masking the whole "Alolan Vulpix" would
+    # make the letter count and first letter useless to the player.
+    form = regional.get_form(spawn.species_id)
+    if form:
+        short = spawn.species.name.split(" ", 1)[1]
+        hint = f"{spawn.species.name.split(' ', 1)[0]} {generate_hint(short, spawn.hints_used)}"
+    else:
+        hint = generate_hint(spawn.species.name, spawn.hints_used)
     spawn.hints_used += 1
     await session.commit()
 

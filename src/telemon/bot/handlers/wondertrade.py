@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telemon.core.emoji import poke_emoji
 from telemon.database.models import Pokemon, User, WonderTrade
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="wondertrade")
 logger = get_logger(__name__)
@@ -169,20 +170,20 @@ async def do_wonder_trade(
     # Validate
     if poke.is_favorite:
         await message.answer(
-            f"{poke.display_name} is a favorite! Remove from favorites first (/fav {pokemon_idx})"
+            f"{esc(poke.display_name)} is a favorite! Remove from favorites first (/fav {pokemon_idx})"
         )
         return
 
     if poke.is_on_market:
-        await message.answer(f"{poke.display_name} is listed on the market!")
+        await message.answer(f"{esc(poke.display_name)} is listed on the market!")
         return
 
     if poke.is_in_trade:
-        await message.answer(f"{poke.display_name} is in an active trade!")
+        await message.answer(f"{esc(poke.display_name)} is in an active trade!")
         return
 
     if str(poke.id) == user.selected_pokemon_id:
-        await message.answer(f"{poke.display_name} is your selected Pokemon! Select another first.")
+        await message.answer(f"{esc(poke.display_name)} is your selected Pokemon! Select another first.")
         return
 
     # Check for a waiting trade from a DIFFERENT user

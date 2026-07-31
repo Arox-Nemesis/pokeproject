@@ -11,6 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.database.models.battle import Battle, BattleStatus
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 logger = get_logger(__name__)
 
@@ -917,7 +918,7 @@ def build_pve_participant_from_pokemon(pokemon: Pokemon) -> PveParticipant:
               "accuracy": m.accuracy, "category": m.category} for m in bp_moves]
 
     return PveParticipant(
-        name=pokemon.display_name,
+        name=esc(pokemon.display_name),
         level=pokemon.level,
         type1=t1,
         type2=t2,
@@ -954,7 +955,7 @@ async def build_pve_participant_from_pokemon_db(
               "accuracy": m.accuracy, "category": m.category} for m in bp_moves]
 
     return PveParticipant(
-        name=pokemon.display_name,
+        name=esc(pokemon.display_name),
         level=pokemon.level,
         type1=t1,
         type2=t2,

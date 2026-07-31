@@ -16,6 +16,7 @@ from telemon.core.emoji import poke_emoji, type_emoji
 from telemon.core.forms import get_mega_forms
 from telemon.database.models import PokedexEntry, Pokemon, PokemonSpecies, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="pokedex")
 logger = get_logger(__name__)
@@ -467,9 +468,9 @@ async def show_pokedex_overview(
     # Title
     if gen:
         gen_name = GEN_NAMES.get(gen, f"Gen {gen}")
-        title = f"📕 <b>{user.display_name}'s Pokédex — Gen {gen} ({gen_name})</b>"
+        title = f"📕 <b>{esc(user.display_name)}'s Pokédex — Gen {gen} ({gen_name})</b>"
     else:
-        title = f"📕 <b>{user.display_name}'s Pokédex</b>"
+        title = f"📕 <b>{esc(user.display_name)}'s Pokédex</b>"
 
     lines = [
         title,
@@ -705,7 +706,7 @@ async def pokedex_search(
 
     if not species:
         await message.answer(
-            f"❌ Pokemon '{query}' not found.\n"
+            f"❌ Pokemon '{esc(query)}' not found.\n"
             "Try using the National Dex number or exact name."
         )
         return

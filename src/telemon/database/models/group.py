@@ -60,13 +60,3 @@ class Group(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Group {self.chat_id} {self.title}>"
-
-    def increment_message_count(self) -> bool:
-        """Increment message count and return True if spawn should trigger."""
-        self.message_count += 1
-        return self.message_count >= self.spawn_threshold
-
-    def reset_message_count(self) -> None:
-        """Reset message count after spawn."""
-        self.message_count = 0
-        self.last_spawn_at = datetime.utcnow()

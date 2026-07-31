@@ -3,133 +3,241 @@
 import random
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import func
 
 from telemon.config import settings
+from telemon.core import regional, shiny
 from telemon.database.models import ActiveSpawn, Group, PokemonSpecies
 from telemon.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-# Rarity weights for spawning
-RARITY_WEIGHTS = {
-    "common": 55,      # catch_rate > 120
-    "uncommon": 30,    # catch_rate 46-120
-    "rare": 12,        # catch_rate 4-45
-    "ultra_rare": 2.5, # catch_rate 1-3
-    "legendary": 0.4,  # is_legendary
-    "mythical": 0.1,   # is_mythical
+# Relative spawn weight of a SINGLE species in each rarity tier.
+#
+# These are per-species weights, not per-tier shares.  The chance of a tier
+# appearing is derived at runtime as (species in tier) x (weight below), so a
+# tier holding very few species can never become disproportionately common.
+# The old implementation used fixed per-tier shares, which made the 3-species
+# ultra_rare tier (Beldum/Metang/Metagross) the most frequent spawn in the game.
+#
+# Keep this list strictly descending: rarer tier => smaller per-species weight.
+PER_SPECIES_WEIGHT = {
+    "common": 100.0,     # catch_rate > 120
+    "uncommon": 55.0,    # catch_rate 46-120
+    "rare": 18.0,        # catch_rate 4-45
+    "ultra_rare": 8.0,   # catch_rate 1-3
+    "legendary": 2.5,    # is_legendary
+    "mythical": 2.0,     # is_mythical
 }
 
-# Alternate form suffixes that should NOT spawn in the wild.
-# These are forms like "Deoxys Normal", "Giratina Altered", etc. that
-# inflate the spawn pool and cause repetitive/unequal distribution.
-# Legitimate multi-word base names (Mr Mime, Tapu Koko, Iron Hands, etc.)
-# are NOT affected because they don't end with these suffixes.
-_FORM_SUFFIXES = {
-    "normal", "plant", "altered", "land", "red striped", "standard",
-    "incarnate", "ordinary", "aria", "male", "female", "shield",
-    "average", "50", "baile", "midday", "solo", "red meteor",
-    "disguised", "amped", "ice", "full belly", "single strike",
-    "rapid strike", "family of four", "green plumage", "zero",
-    "curly", "two segment",
-}
+# How long the per-tier species counts stay cached, in seconds.  The species
+# table is effectively static at runtime, so this only matters after an import.
+_TIER_COUNT_TTL = 600
+
+# Cache of (rarity -> number of eligible species), refreshed periodically.
+_tier_counts: dict[str, int] | None = None
+_tier_counts_at: datetime | None = None
+
+# Only real dex entries spawn in the wild.  Megas, regional variants and other
+# alternate forms are stored at national_dex >= 10000 and are excluded by this
+# bound alone, so no name-based filtering is needed.
+#
+# NOTE: an earlier version also dropped any species whose name ended in a form
+# suffix ("Normal", "Ordinary", "Land", ...).  For 34 Pokemon the suffixed row
+# is the ONLY row below 10000 -- Keldeo exists solely as "Keldeo Ordinary" --
+# so that filter made those species completely unobtainable in the wild.
+MAX_WILD_DEX = 10000
+
+# Chance that a spawn of a species with regional variants is replaced by one of
+# those variants.  Regionals are pulled in through their BASE species' rarity
+# tier rather than being given their own -- they have no catch_rate of their own
+# worth trusting (the importer copies the base value), and routing them through
+# the base keeps a rare base rare.  1-in-16 makes a regional roughly as
+# uncommon as it should feel without making the base species hard to find.
+REGIONAL_SPAWN_CHANCE = 1 / 16
+
+# How long an uncaught spawn keeps its chat from spawning again.  This is NOT
+# the flee timeout: when fleeing is disabled a spawn never expires, so without
+# an upper bound here one un-guessed Pokemon silences a group permanently.
+SPAWN_BLOCK_MINUTES = 30
+
+# The same guard, but for incense.  Incense is a paid burst -- the loop ticks
+# every 10 seconds -- so the 30-minute pacing window is completely wrong for
+# it: a 120-spawn incense in a group where nobody guesses would take 60 hours
+# to drain.  60 seconds still stops an unattended group from being carpeted
+# with spawns nobody is answering, while an active group drains at loop speed.
+INCENSE_BLOCK_SECONDS = 60
 
 
-def _is_alternate_form(species_name: str) -> bool:
-    """Return True if the species name looks like an alternate form.
+def _rarity_condition(rarity: str):
+    """Build the SQL predicate selecting exactly one rarity tier.
 
-    Checks whether the name (after lowercasing) ends with one of the known
-    form suffixes.  Multi-word base Pokemon (e.g. "Mr Mime", "Tapu Koko")
-    never end with these suffixes so they pass through safely.
+    The tiers are mutually exclusive and together cover every species, matching
+    PokemonSpecies.rarity.  Legendaries and mythicals are classified by flag
+    regardless of catch_rate, which keeps species like Necrozma or Eternatus
+    (catch_rate 255) out of the common pool.
     """
-    name_lower = species_name.lower()
-    for suffix in _FORM_SUFFIXES:
-        if name_lower.endswith(" " + suffix):
-            return True
-    return False
+    is_legendary = PokemonSpecies.is_legendary.is_(True)
+    is_mythical = PokemonSpecies.is_mythical.is_(True)
+    ordinary = and_(
+        PokemonSpecies.is_legendary.is_(False),
+        PokemonSpecies.is_mythical.is_(False),
+    )
+
+    if rarity == "mythical":
+        return is_mythical
+    if rarity == "legendary":
+        return and_(is_legendary, PokemonSpecies.is_mythical.is_(False))
+    if rarity == "ultra_rare":
+        return and_(ordinary, PokemonSpecies.catch_rate <= 3)
+    if rarity == "rare":
+        return and_(
+            ordinary,
+            PokemonSpecies.catch_rate > 3,
+            PokemonSpecies.catch_rate <= 45,
+        )
+    if rarity == "uncommon":
+        return and_(
+            ordinary,
+            PokemonSpecies.catch_rate > 45,
+            PokemonSpecies.catch_rate <= 120,
+        )
+    return and_(ordinary, PokemonSpecies.catch_rate > 120)
+
+
+async def _get_tier_counts(session: AsyncSession) -> dict[str, int]:
+    """Return the number of spawnable species in each rarity tier (cached)."""
+    global _tier_counts, _tier_counts_at
+
+    now = datetime.utcnow()
+    if (
+        _tier_counts is not None
+        and _tier_counts_at is not None
+        and (now - _tier_counts_at).total_seconds() < _TIER_COUNT_TTL
+    ):
+        return _tier_counts
+
+    counts: dict[str, int] = {}
+    for rarity in PER_SPECIES_WEIGHT:
+        result = await session.execute(
+            select(func.count())
+            .select_from(PokemonSpecies)
+            .where(PokemonSpecies.national_dex < MAX_WILD_DEX)
+            .where(_rarity_condition(rarity))
+        )
+        counts[rarity] = result.scalar() or 0
+
+    _tier_counts = counts
+    _tier_counts_at = now
+    return counts
+
+
+def invalidate_tier_cache() -> None:
+    """Drop the cached tier counts (call after importing/altering species)."""
+    global _tier_counts, _tier_counts_at
+    _tier_counts = None
+    _tier_counts_at = None
+
+
+async def roll_rarity(session: AsyncSession) -> str:
+    """Pick a rarity tier, weighted by per-species weight x tier population.
+
+    Because each tier's share is proportional to how many species it holds, two
+    species in the same tier remain equally likely AND a species in a rarer tier
+    is always strictly less likely than one in a commoner tier -- regardless of
+    how the tiers are sized.
+    """
+    counts = await _get_tier_counts(session)
+
+    tiers = [r for r in PER_SPECIES_WEIGHT if counts.get(r, 0) > 0]
+    if not tiers:
+        return "common"
+
+    weights = [PER_SPECIES_WEIGHT[r] * counts[r] for r in tiers]
+    return random.choices(tiers, weights=weights, k=1)[0]
+
+
+async def _maybe_regional(
+    session: AsyncSession, species: PokemonSpecies
+) -> PokemonSpecies:
+    """Occasionally swap ``species`` for one of its regional variants.
+
+    Regional forms live at dex >= 10000 and so can never be picked by the tier
+    query directly.  Substituting after the pick is what makes them spawnable
+    while keeping Megas (also >= 10000) excluded, since only dex numbers listed
+    in ``core.regional`` are eligible.
+    """
+    forms = regional.get_forms_for_base(species.national_dex)
+    if not forms:
+        return species
+    if random.random() >= REGIONAL_SPAWN_CHANCE:
+        return species
+
+    form = random.choice(forms)
+    result = await session.execute(
+        select(PokemonSpecies).where(PokemonSpecies.national_dex == form.dex)
+    )
+    variant = result.scalar_one_or_none()
+    if variant is None:
+        # Species table lacks the form row -- verify_against_db logs this at
+        # startup; fall back to the base rather than dropping the spawn.
+        logger.warning("Regional form row missing", dex=form.dex)
+        return species
+    return variant
 
 
 async def get_random_species(session: AsyncSession) -> PokemonSpecies | None:
-    """Get a random Pokemon species based on rarity weights."""
-    # Roll for rarity
-    roll = random.random() * 100
-    cumulative = 0
+    """Get a random Pokemon species for a wild spawn.
 
-    selected_rarity = "common"
-    for rarity, weight in RARITY_WEIGHTS.items():
-        cumulative += weight
-        if roll <= cumulative:
-            selected_rarity = rarity
-            break
+    Two-stage weighted pick: choose a rarity tier (weighted so that per-species
+    odds stay ordered by rarity), then choose uniformly within that tier.  A
+    species that has regional variants may then be swapped for one of them.
+    """
+    selected_rarity = await roll_rarity(session)
 
-    # Build query based on rarity — exclude forms (Megas, regionals) from wild spawns
-    query = select(PokemonSpecies).where(PokemonSpecies.national_dex < 10000)
+    # Pick uniformly inside the tier, in the database, so we never load the
+    # whole tier into memory just to discard all but one row.
+    result = await session.execute(
+        select(PokemonSpecies)
+        .where(PokemonSpecies.national_dex < MAX_WILD_DEX)
+        .where(_rarity_condition(selected_rarity))
+        .order_by(func.random())
+        .limit(1)
+    )
+    species = result.scalar_one_or_none()
 
-    if selected_rarity == "mythical":
-        query = query.where(PokemonSpecies.is_mythical == True)
-    elif selected_rarity == "legendary":
-        query = query.where(PokemonSpecies.is_legendary == True)
-        query = query.where(PokemonSpecies.is_mythical == False)
-    elif selected_rarity == "ultra_rare":
-        query = query.where(PokemonSpecies.catch_rate <= 3)
-        query = query.where(PokemonSpecies.is_legendary == False)
-        query = query.where(PokemonSpecies.is_mythical == False)
-    elif selected_rarity == "rare":
-        query = query.where(PokemonSpecies.catch_rate > 3)
-        query = query.where(PokemonSpecies.catch_rate <= 45)
-        query = query.where(PokemonSpecies.is_legendary == False)
-    elif selected_rarity == "uncommon":
-        query = query.where(PokemonSpecies.catch_rate > 45)
-        query = query.where(PokemonSpecies.catch_rate <= 120)
-    else:  # common
-        query = query.where(PokemonSpecies.catch_rate > 120)
+    if species is not None:
+        return await _maybe_regional(session, species)
 
-    # Fetch all candidates and filter out alternate forms in Python.
-    # This avoids complex SQL regex and keeps the form-exclusion logic
-    # readable and maintainable.
-    result = await session.execute(query)
-    candidates = result.scalars().all()
+    # Tier turned out to be empty (stale cache, or a partial species import).
+    logger.warning("Rarity tier empty, falling back", rarity=selected_rarity)
+    invalidate_tier_cache()
 
-    # Filter out alternate forms
-    base_forms = [s for s in candidates if not _is_alternate_form(s.name)]
-
-    if base_forms:
-        return random.choice(base_forms)
-
-    # If no base forms found after filtering, try unfiltered
-    if candidates:
-        return random.choice(candidates)
-
-    # Fallback: any random base-form Pokemon
     fallback = await session.execute(
         select(PokemonSpecies)
-        .where(PokemonSpecies.national_dex < 10000)
-        .order_by(func.random()).limit(1)
+        .where(PokemonSpecies.national_dex < MAX_WILD_DEX)
+        .order_by(func.random())
+        .limit(1)
     )
     species = fallback.scalar_one_or_none()
-
-    return species
+    if species is None:
+        return None
+    return await _maybe_regional(session, species)
 
 
 def should_be_shiny(chain_bonus: int = 0) -> bool:
-    """Determine if a spawn should be shiny."""
-    base_rate = settings.shiny_base_rate
+    """Determine if a spawn should be shiny.
 
-    # Apply chain bonus
-    if chain_bonus > 200:
-        rate = base_rate // 8  # 1/512
-    elif chain_bonus > 100:
-        rate = base_rate // 4  # 1/1024
-    elif chain_bonus > 50:
-        rate = base_rate // 2  # 1/2048
-    else:
-        rate = base_rate  # 1/4096
-
-    return random.randint(1, rate) == 1
+    Delegates to ``core.shiny`` so the spawn roll, the catch-time hunter bonus
+    and the odds table shown by ``/shinyhunt`` all read from one set of tiers.
+    The spawn roll itself is charm-free: a spawn belongs to a whole group, so
+    no single player's Shiny Charm applies here.  The catcher's charm and chain
+    are folded in at catch time via ``shiny.bonus_probability``.
+    """
+    return random.randint(1, shiny.shiny_rate(chain_bonus)) == 1
 
 
 async def create_spawn(
@@ -210,17 +318,63 @@ async def create_spawn(
     return spawn
 
 
-async def get_active_spawn(session: AsyncSession, chat_id: int) -> ActiveSpawn | None:
-    """Get the currently active spawn for a chat."""
+async def get_active_spawn(
+    session: AsyncSession, chat_id: int, *, incense: bool = False
+) -> ActiveSpawn | None:
+    """Get the spawn that should block a new spawn in ``chat_id``.
+
+    Two rows are deliberately not treated as blocking:
+
+    * ``message_id = 0`` -- never delivered to Telegram (the process died
+      between ``create_spawn`` and the send).  Nobody can see it, let alone
+      catch it.
+    * anything older than the block window -- with ``flee_enabled = 0`` spawns
+      are given a 100-year ``expires_at``, so a Pokemon nobody manages to guess
+      would otherwise block its chat's spawning *forever*.  409 live groups
+      were stuck this way, several of them for over a month.
+
+    Pass ``incense=True`` from the incense loop: incense is a paid burst that
+    ticks every 10 seconds, so it uses ``INCENSE_BLOCK_SECONDS`` instead of the
+    much longer natural-pacing window.
+
+    A never-guessed spawn stays catchable (``catch.py`` filters on
+    ``expires_at`` and takes the newest row), it just stops holding the queue.
+    """
+    if incense:
+        cutoff = datetime.utcnow() - timedelta(seconds=INCENSE_BLOCK_SECONDS)
+    else:
+        cutoff = datetime.utcnow() - timedelta(minutes=SPAWN_BLOCK_MINUTES)
     result = await session.execute(
         select(ActiveSpawn)
         .where(ActiveSpawn.chat_id == chat_id)
         .where(ActiveSpawn.caught_by.is_(None))
+        .where(ActiveSpawn.message_id != 0)
         .where(ActiveSpawn.expires_at > datetime.utcnow())
+        .where(ActiveSpawn.spawned_at > cutoff)
         .order_by(ActiveSpawn.spawned_at.desc())
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def purge_undelivered_spawns(session: AsyncSession) -> int:
+    """Delete spawn rows that never got a Telegram message, return the count.
+
+    ``create_spawn`` inserts with ``message_id = 0`` and the caller patches in
+    the real id once the send succeeds.  A crash, a restart or an unhandled
+    send error in between leaves a row nobody can ever catch.  Run at startup
+    so those rows do not accumulate.
+    """
+    result = await session.execute(
+        delete(ActiveSpawn)
+        .where(ActiveSpawn.message_id == 0)
+        .where(ActiveSpawn.caught_by.is_(None))
+    )
+    await session.commit()
+    count = result.rowcount or 0
+    if count:
+        logger.info("Purged undelivered spawns", count=count)
+    return count
 
 
 async def check_spawn_trigger(session: AsyncSession, chat_id: int) -> bool:
@@ -260,15 +414,3 @@ async def check_spawn_trigger(session: AsyncSession, chat_id: int) -> bool:
                 return True
 
     return False
-
-
-async def increment_message_count(session: AsyncSession, chat_id: int) -> None:
-    """Increment the message count for spawn tracking."""
-    result = await session.execute(
-        select(Group).where(Group.chat_id == chat_id)
-    )
-    group = result.scalar_one_or_none()
-
-    if group:
-        group.message_count += 1
-        await session.commit()

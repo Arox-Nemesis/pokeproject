@@ -40,6 +40,7 @@ from telemon.core.leveling import (
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.database.models.battle import Battle, BattleStatus
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="battle")
 logger = get_logger(__name__)
@@ -92,8 +93,8 @@ async def format_battle_status(session: AsyncSession, battle: Battle) -> str:
     p2_hp = battle.battle_state.get("p2_hp", 0)
     p2_max = battle.battle_state.get("p2_max_hp", 1)
     
-    p1_name = p1.username or f"Player {battle.player1_id}"
-    p2_name = p2.username or f"Player {battle.player2_id}"
+    p1_name = esc(p1.username) or f"Player {battle.player1_id}"
+    p2_name = esc(p2.username) or f"Player {battle.player2_id}"
     
     whose_turn_name = p1_name if battle.whose_turn == battle.player1_id else p2_name
     
@@ -213,7 +214,7 @@ async def cmd_duel(message: Message, session: AsyncSession, user: User) -> None:
         target_user = result.scalar_one_or_none()
         
         if not target_user:
-            await message.answer(f" User @{username} not found.")
+            await message.answer(f" User @{esc(username)} not found.")
             return
     elif target_arg.isdigit():
         # By ID
@@ -223,7 +224,7 @@ async def cmd_duel(message: Message, session: AsyncSession, user: User) -> None:
         target_user = result.scalar_one_or_none()
         
         if not target_user:
-            await message.answer(f" User {target_arg} not found.")
+            await message.answer(f" User {esc(target_arg)} not found.")
             return
     else:
         await message.answer(" Please provide a valid @username or user ID.")
@@ -238,7 +239,7 @@ async def cmd_duel(message: Message, session: AsyncSession, user: User) -> None:
     target_battle = await get_active_battle(session, target_user.telegram_id)
     if target_battle:
         await message.answer(
-            f" @{target_user.username or target_user.telegram_id} is already in a battle!"
+            f" @{esc(target_user.username or target_user.telegram_id)} is already in a battle!"
         )
         return
     
@@ -274,8 +275,8 @@ async def cmd_duel(message: Message, session: AsyncSession, user: User) -> None:
     builder.button(text="Decline", callback_data=f"battle:decline:{battle.id}", style="danger")
     builder.adjust(2)
     
-    target_name = target_user.username or f"User {target_user.telegram_id}"
-    challenger_name = user.username or f"User {user.telegram_id}"
+    target_name = esc(target_user.username) or f"User {target_user.telegram_id}"
+    challenger_name = esc(user.username) or f"User {user.telegram_id}"
     
     await message.answer(
         f"<b>Battle Challenge!</b>\n\n"
@@ -470,7 +471,7 @@ async def callback_execute_move(
                 select(Pokemon).where(Pokemon.id == winner_poke_id)
             )
             winner_poke = winner_poke_result.scalar_one()
-            lines.append(f"\n{winner_poke.display_name} leveled up to Lv.{winner_poke.level}!")
+            lines.append(f"\n{esc(winner_poke.display_name)} leveled up to Lv.{winner_poke.level}!")
         if learned_moves:
             for mv in learned_moves:
                 lines.append(f"{mv} was learned!")
@@ -502,7 +503,7 @@ async def callback_execute_move(
         except Exception as e:
             logger.warning("Team XP award failed on PvP battle win", error=str(e))
 
-        winner_name = winner.username or f"User {winner.telegram_id}"
+        winner_name = esc(winner.username) or f"User {winner.telegram_id}"
         
         lines.extend([
             "",
@@ -571,9 +572,9 @@ async def callback_forfeit_battle(
         select(User).where(User.telegram_id == winner_id)
     )
     winner = winner_result.scalar_one()
-    winner_name = winner.username or f"User {winner_id}"
+    winner_name = esc(winner.username) or f"User {winner_id}"
     
-    forfeiter_name = user.username or f"User {user.telegram_id}"
+    forfeiter_name = esc(user.username) or f"User {user.telegram_id}"
     
     logger.info(
         "Battle forfeited",
@@ -610,7 +611,7 @@ async def cmd_forfeit(message: Message, session: AsyncSession, user: User) -> No
         select(User).where(User.telegram_id == winner_id)
     )
     winner = winner_result.scalar_one()
-    winner_name = winner.username or f"User {winner_id}"
+    winner_name = esc(winner.username) or f"User {winner_id}"
     
     await message.answer(
         f" You forfeited the battle!\n"
@@ -1087,7 +1088,7 @@ async def _handle_pve_win(
             select(Pokemon).where(Pokemon.id == pokemon_id)
         )
         poke = poke_result.scalar_one()
-        lines.append(f"{poke.display_name} leveled up to Lv.{poke.level}!")
+        lines.append(f"{esc(poke.display_name)} leveled up to Lv.{poke.level}!")
     if learned_moves:
         for mv in learned_moves:
             lines.append(f"{mv} was learned!")

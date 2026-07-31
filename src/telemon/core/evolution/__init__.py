@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from telemon.core import regional
 from telemon.core.items import ITEM_BY_NAME, LINKING_CORD_ID
 from telemon.database.models import InventoryItem, Pokemon, PokemonSpecies
 from telemon.logging import get_logger
@@ -15,6 +16,67 @@ logger = get_logger(__name__)
 
 # Load evolution data
 _EVOLUTION_DATA: dict[str, Any] = {}
+
+# data/evolutions.json is generated from PokeAPI, which records these as
+# special-condition evolutions (Sirfetch'd needs three critical hits, Gholdengo
+# needs 999 coins, ...) with no minimum level.  Without a level the "level"
+# trigger defaults to 1 and the Pokemon evolves the moment it is caught, so each
+# one gets the level it is realistically reachable at instead.
+_MIN_LEVEL_FALLBACKS: dict[tuple[int, int], int] = {
+    (83, 865): 30,    # Farfetch'd -> Sirfetch'd (3 crits in one battle)
+    (211, 904): 30,   # Qwilfish -> Overqwil (Barb Barrage x20)
+    (234, 899): 30,   # Stantler -> Wyrdeer (Psyshield Bash x20)
+    (290, 292): 20,   # Nincada -> Shedinja (spare party slot at Ninjask's level)
+    (550, 902): 30,   # Basculin -> Basculegion (recoil damage)
+    (562, 867): 34,   # Yamask -> Runerigus (damage + Dusty Bowl)
+    (625, 983): 52,   # Bisharp -> Kingambit (defeat 3 Bisharp leaders)
+    (868, 869): 30,   # Milcery -> Alcremie (spin with a sweet)
+    (891, 892): 40,   # Kubfu -> Urshifu (Tower of Darkness/Waters)
+    (924, 925): 25,   # Tandemaus -> Maushold (canon level 25)
+    (999, 1000): 45,  # Gimmighoul -> Gholdengo (999 coins)
+}
+
+
+def _evo_key(evo: dict[str, Any]) -> tuple:
+    """Identity of an evolution entry, for duplicate removal."""
+    return (
+        evo.get("species_id"),
+        evo.get("evolves_to"),
+        evo.get("trigger"),
+        evo.get("min_level"),
+        evo.get("item"),
+        evo.get("min_friendship"),
+    )
+
+
+def _dedupe(entries) -> list[dict[str, Any]]:
+    """Keep the first occurrence of each distinct evolution entry."""
+    seen: set[tuple] = set()
+    out: list[dict[str, Any]] = []
+    for evo in entries:
+        key = _evo_key(evo)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(evo)
+    return out
+
+
+def _normalize_chain(chain: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop duplicate entries and supply missing ``min_level`` values.
+
+    The generated data lists some transitions twice (every Eevee stone route,
+    the Gen-1 water stone lines), which would otherwise show up twice in the
+    "Possible Evolutions" display.
+    """
+    filled = []
+    for evo in chain:
+        if evo.get("trigger") == "level" and "min_level" not in evo:
+            fallback = _MIN_LEVEL_FALLBACKS.get((evo["species_id"], evo["evolves_to"]))
+            if fallback is not None:
+                evo = {**evo, "min_level": fallback}
+        filled.append(evo)
+    return _dedupe(filled)
 
 
 def _load_evolution_data() -> dict[str, Any]:
@@ -26,7 +88,22 @@ def _load_evolution_data() -> dict[str, Any]:
     data_path = Path(__file__).parent.parent.parent.parent.parent / "data" / "evolutions.json"
     if data_path.exists():
         with open(data_path) as f:
-            _EVOLUTION_DATA = json.load(f)
+            raw = json.load(f)
+        _EVOLUTION_DATA = {
+            chain_id: {**chain_data, "chain": _normalize_chain(chain_data.get("chain", []))}
+            for chain_id, chain_data in raw.items()
+        }
+        still_missing = sum(
+            1
+            for chain_data in _EVOLUTION_DATA.values()
+            for evo in chain_data["chain"]
+            if evo.get("trigger") == "level" and "min_level" not in evo
+        )
+        if still_missing:
+            logger.warning(
+                "Level evolutions with no min_level would trigger at level 1",
+                count=still_missing,
+            )
     else:
         logger.warning("Evolution data file not found", path=str(data_path))
         _EVOLUTION_DATA = {}
@@ -37,6 +114,42 @@ def _load_evolution_data() -> dict[str, Any]:
 def get_evolution_data() -> dict[str, Any]:
     """Get evolution data."""
     return _load_evolution_data()
+
+
+def _evolutions_for_species(species_id: int) -> list[dict[str, Any]]:
+    """Every evolution entry available to ``species_id``.
+
+    Regional forms are not in ``data/evolutions.json`` at all, so their single
+    line comes from ``core.regional``.  Base species get their generated entries
+    minus the ones that are only legal from a regional form.
+    """
+    form_evo = regional.get_evolution(species_id)
+    if form_evo:
+        entries: list[dict[str, Any]] = []
+        for target, trigger, requirement in form_evo:
+            entry: dict[str, Any] = {
+                "species_id": species_id,
+                "evolves_to": target,
+                "trigger": trigger,
+            }
+            if trigger == "level":
+                entry["min_level"] = requirement
+            elif trigger == "item":
+                entry["item"] = requirement
+            entries.append(entry)
+        return entries
+
+    if regional.is_regional(species_id):
+        # A regional form with no evolution of its own (e.g. Alolan Ninetales).
+        return []
+
+    return _dedupe(
+        evo
+        for chain_data in get_evolution_data().values()
+        for evo in chain_data.get("chain", [])
+        if evo["species_id"] == species_id
+        and not regional.is_form_exclusive_evolution(species_id, evo["evolves_to"])
+    )
 
 
 class EvolutionResult:
@@ -59,12 +172,48 @@ class EvolutionResult:
         self.missing_requirement = missing_requirement
 
 
+def _is_satisfiable(
+    evo: dict[str, Any],
+    pokemon: Pokemon,
+    use_item_lower: str | None,
+    is_trade: bool,
+) -> bool:
+    """Whether this entry's condition holds right now, ignoring inventory.
+
+    Used only to decide whether a branching evolution needs the player to pick;
+    the authoritative check happens in the main loop of ``check_evolution``.
+    """
+    trigger = evo.get("trigger")
+    if trigger == "level":
+        return pokemon.level >= evo.get("min_level", 1)
+    if trigger == "item":
+        return bool(use_item_lower) and use_item_lower == evo.get("item", "").lower()
+    if trigger == "trade":
+        return is_trade
+    if trigger == "friendship":
+        return pokemon.friendship >= evo.get("min_friendship", 220)
+    return False
+
+
+async def _species_names(session: AsyncSession, dex_ids: list[int]) -> dict[int, str]:
+    """Map dex numbers to display names in one query."""
+    if not dex_ids:
+        return {}
+    result = await session.execute(
+        select(PokemonSpecies.national_dex, PokemonSpecies.name).where(
+            PokemonSpecies.national_dex.in_(dex_ids)
+        )
+    )
+    return dict(result.all())
+
+
 async def check_evolution(
     session: AsyncSession,
     pokemon: Pokemon,
     user_id: int,
     use_item: str | None = None,
     is_trade: bool = False,
+    target_species_id: int | None = None,
 ) -> EvolutionResult:
     """
     Check if a Pokemon can evolve.
@@ -75,11 +224,14 @@ async def check_evolution(
         user_id: The owner's user ID
         use_item: Item name if trying to evolve with an item
         is_trade: Whether this is a trade evolution check
+        target_species_id: Restrict the check to one branch of a branching
+            evolution.  Without it, a species with several currently-satisfiable
+            branches (Eevee, Nincada, Wurmple) reports the choice back instead of
+            silently taking whichever the data file happens to list first.
 
     Returns:
         EvolutionResult with evolution details
     """
-    evolution_data = get_evolution_data()
     species_id = pokemon.species_id
 
     # Special case: if the user is using a Linking Cord, treat as trade
@@ -95,18 +247,44 @@ async def check_evolution(
         use_item_lower = None
 
     # Find evolution chain for this species
-    possible_evolutions = []
-
-    for chain_id, chain_data in evolution_data.items():
-        for evo in chain_data.get("chain", []):
-            if evo["species_id"] == species_id:
-                possible_evolutions.append(evo)
+    possible_evolutions = _evolutions_for_species(species_id)
 
     if not possible_evolutions:
         return EvolutionResult(
             can_evolve=False,
             missing_requirement="This Pokemon cannot evolve.",
         )
+
+    if target_species_id is not None:
+        possible_evolutions = [
+            evo for evo in possible_evolutions if evo["evolves_to"] == target_species_id
+        ]
+        if not possible_evolutions:
+            return EvolutionResult(
+                can_evolve=False,
+                missing_requirement="That is not one of this Pokemon's evolutions.",
+            )
+    elif len(possible_evolutions) > 1:
+        # Ask which branch, but only when more than one is actually reachable
+        # right now -- Eevee with a single Fire Stone should just evolve.
+        reachable = [
+            evo
+            for evo in possible_evolutions
+            if _is_satisfiable(evo, pokemon, use_item_lower, is_trade)
+        ]
+        if len(reachable) > 1:
+            names = await _species_names(session, [e["evolves_to"] for e in reachable])
+            options = ", ".join(names.get(e["evolves_to"], "?") for e in reachable)
+            return EvolutionResult(
+                can_evolve=False,
+                trigger=reachable[0]["trigger"],
+                missing_requirement=(
+                    f"This Pokemon can evolve into several forms: {options}.\n"
+                    f"Pick one, e.g. /evolve {names.get(reachable[0]['evolves_to'], '')}"
+                ),
+            )
+        if reachable:
+            possible_evolutions = reachable
 
     # Check each possible evolution
     for evo in possible_evolutions:
@@ -297,6 +475,7 @@ async def evolve_pokemon(
     user_id: int,
     use_item: str | None = None,
     is_trade: bool = False,
+    target_species_id: int | None = None,
 ) -> tuple[bool, str]:
     """
     Attempt to evolve a Pokemon.
@@ -307,6 +486,7 @@ async def evolve_pokemon(
         user_id: The owner's user ID
         use_item: Item name if evolving with an item
         is_trade: Whether this is a trade evolution
+        target_species_id: Which branch to take, for branching evolutions
 
     Returns:
         Tuple of (success, message)
@@ -315,7 +495,9 @@ async def evolve_pokemon(
     using_linking_cord = use_item_lower == "linking cord"
 
     # Check if can evolve
-    result = await check_evolution(session, pokemon, user_id, use_item, is_trade)
+    result = await check_evolution(
+        session, pokemon, user_id, use_item, is_trade, target_species_id
+    )
 
     if not result.can_evolve:
         return False, result.missing_requirement or "Cannot evolve."
@@ -393,6 +575,39 @@ async def evolve_pokemon(
     if evolved_species.abilities:
         pokemon.ability = random.choice(evolved_species.abilities)
 
+    # Learn anything the evolved form already knows at this level.  Without this
+    # a Pokemon evolved past its starter moves keeps the pre-evolution's set
+    # forever, since auto_learn_moves_on_levelup only fires on a level change.
+    learned: list[str] = []
+    try:
+        from telemon.core.moves import MAX_MOVES, get_learnable_moves
+
+        known = list(pokemon.moves or [])
+        if len(known) < MAX_MOVES:
+            learnable = await get_learnable_moves(
+                session, pokemon.species_id, pokemon.level
+            )
+            # Highest-level moves first -- those are the ones the evolved form
+            # gained access to.
+            for entry in reversed(learnable):
+                name = entry["move"].name_lower
+                if name in known:
+                    continue
+                known.append(name)
+                learned.append(entry["move"].name)
+                if len(known) >= MAX_MOVES:
+                    break
+            if learned:
+                pokemon.moves = known
+    except Exception as e:
+        logger.warning("Move refresh on evolve failed", error=str(e))
+
+    # Record which alternate form this Pokemon is now in, so displays and future
+    # lookups do not have to re-derive it from the species id.
+    pokemon.form = regional.get_form(pokemon.species_id).region if regional.is_regional(
+        pokemon.species_id
+    ) else None
+
     await session.commit()
 
     logger.info(
@@ -403,17 +618,12 @@ async def evolve_pokemon(
         trigger=result.trigger,
     )
 
-    return True, f"{old_species_name} evolved into {evolved_species.name}!"
+    message = f"{old_species_name} evolved into {evolved_species.name}!"
+    if learned:
+        message += f"\nLearned {', '.join(learned)}!"
+    return True, message
 
 
 def get_possible_evolutions(species_id: int) -> list[dict]:
     """Get all possible evolutions for a species."""
-    evolution_data = get_evolution_data()
-    evolutions = []
-
-    for chain_id, chain_data in evolution_data.items():
-        for evo in chain_data.get("chain", []):
-            if evo["species_id"] == species_id:
-                evolutions.append(evo)
-
-    return evolutions
+    return _evolutions_for_species(species_id)

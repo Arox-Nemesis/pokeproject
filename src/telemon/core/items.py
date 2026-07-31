@@ -46,6 +46,13 @@ ALL_ITEMS: list[dict[str, Any]] = [
     {"id": 27, "name": "Auspicious Armor", "name_lower": "auspicious armor", "category": "evolution", "cost": 1500, "sell_price": 750,  "is_consumable": True,  "is_holdable": False, "description": "Evolves Charcadet into Armarouge."},
     {"id": 28, "name": "Malicious Armor",  "name_lower": "malicious armor",  "category": "evolution", "cost": 1500, "sell_price": 750,  "is_consumable": True,  "is_holdable": False, "description": "Evolves Charcadet into Ceruledge."},
 
+    # ── Regional-form Evolution Items (IDs 31–33) ──
+    # Required by the Galarian/Hisuian lines in core.regional; without these
+    # Galarian Slowpoke and Hisuian Sneasel would have no evolution route.
+    {"id": 31, "name": "Galarica Cuff",     "name_lower": "galarica cuff",     "category": "evolution", "cost": 1500, "sell_price": 750,  "is_consumable": True,  "is_holdable": False, "description": "Evolves Galarian Slowpoke into Galarian Slowbro."},
+    {"id": 32, "name": "Galarica Wreath",   "name_lower": "galarica wreath",   "category": "evolution", "cost": 1500, "sell_price": 750,  "is_consumable": True,  "is_holdable": False, "description": "Evolves Galarian Slowpoke into Galarian Slowking."},
+    {"id": 33, "name": "Razor Claw",        "name_lower": "razor claw",        "category": "evolution", "cost": 1500, "sell_price": 750,  "is_consumable": True,  "is_holdable": False, "description": "Evolves Hisuian Sneasel into Sneasler."},
+
     # ── Trade Helper (ID 29) ──
     {"id": 29, "name": "Linking Cord",  "name_lower": "linking cord",  "category": "evolution", "cost": 3000, "sell_price": 1500, "is_consumable": True,  "is_holdable": False, "description": "Simulates a trade. Evolves trade-evolution Pokemon without trading."},
 
@@ -69,7 +76,7 @@ ALL_ITEMS: list[dict[str, Any]] = [
 
     # ── Special Items (IDs 301–302) ──
     {"id": 301, "name": "Shiny Charm",  "name_lower": "shiny charm",   "category": "special", "cost": 50000,  "sell_price": 25000, "is_consumable": False, "is_holdable": False, "description": "Triples your shiny odds! A must-have for shiny hunters."},
-    {"id": 302, "name": "Oval Charm",   "name_lower": "oval charm",    "category": "special", "cost": 25000,  "sell_price": 12500, "is_consumable": False, "is_holdable": False, "description": "Increases egg hatch speed. (Coming soon)"},
+    {"id": 302, "name": "Oval Charm",   "name_lower": "oval charm",    "category": "special", "cost": 25000,  "sell_price": 12500, "is_consumable": False, "is_holdable": False, "description": "Halves the steps every egg you receive needs to hatch."},
 
     # ── Mega Stones (IDs 401–448, 5000 TC) ──
     {"id": 401, "name": "Venusaurite",     "name_lower": "venusaurite",     "category": "mega_stone", "cost": 5000, "sell_price": 2500, "is_consumable": False, "is_holdable": True, "description": "Mega Evolves Venusaur permanently via /mega."},

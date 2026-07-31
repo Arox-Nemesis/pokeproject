@@ -9,17 +9,23 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from telemon.config import settings
+from telemon.core import shiny
 from telemon.core.constants import NATURES, MAX_IV, determine_gender
-from telemon.database.models import Pokemon, PokemonSpecies
+from telemon.database.models import InventoryItem, Pokemon, PokemonSpecies
 from telemon.database.models.breeding import DaycareSlot, PokemonEgg
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 logger = get_logger(__name__)
 
 DITTO_ID = 132
 MAX_EGGS = 6
 STAT_NAMES = ["hp", "attack", "defense", "sp_attack", "sp_defense", "speed"]
+
+# Oval Charm (item 302): divides the number of steps an egg needs to hatch.
+OVAL_CHARM_ID = 302
+OVAL_CHARM_STEP_DIVISOR = 2
+MIN_EGG_STEPS = 25
 
 # Baby Pokemon that need special incense to breed (simplified: we don't require
 # incense, the egg will always be the base-form baby).
@@ -176,6 +182,17 @@ def calculate_inherited_ivs(
 # Egg creation
 # ---------------------------------------------------------------------------
 
+async def has_oval_charm(session: AsyncSession, user_id: int) -> bool:
+    """Whether the user owns an Oval Charm (item 302)."""
+    result = await session.execute(
+        select(InventoryItem)
+        .where(InventoryItem.user_id == user_id)
+        .where(InventoryItem.item_id == OVAL_CHARM_ID)
+        .where(InventoryItem.quantity > 0)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def create_egg(
     session: AsyncSession,
     user_id: int,
@@ -202,11 +219,18 @@ async def create_egg(
     # Calculate IVs
     ivs = calculate_inherited_ivs(parent1, parent2)
 
-    # Steps from hatch_counter (scale down for messaging pace)
+    # Steps from hatch_counter (scale down for messaging pace).  The Oval
+    # Charm halves the requirement -- that is its whole effect.
     steps_total = max(egg_species.hatch_counter * 10, 50)
+    oval_charm = await has_oval_charm(session, user_id)
+    if oval_charm:
+        steps_total = max(steps_total // OVAL_CHARM_STEP_DIVISOR, MIN_EGG_STEPS)
 
-    # Shiny chance
-    is_shiny = random.randint(1, settings.shiny_base_rate) == 1
+    # Shiny chance -- shares the Shiny Charm with wild hunting, so the odds a
+    # player sees advertised on the charm hold for eggs too.  Chain is 0: a
+    # shiny hunt tracks one wild species and has no bearing on breeding.
+    rate = shiny.shiny_rate(0, await shiny.has_shiny_charm(session, user_id))
+    is_shiny = random.randint(1, rate) == 1
 
     egg = PokemonEgg(
         id=uuid.uuid4(),
@@ -234,6 +258,7 @@ async def create_egg(
         egg_species=egg_species.name,
         steps=steps_total,
         is_shiny=is_shiny,
+        oval_charm=oval_charm,
     )
     return egg
 
@@ -369,7 +394,7 @@ async def add_to_daycare(
     # Check if this Pokemon is already in daycare
     for slot in slots:
         if slot.pokemon_id == pokemon.id:
-            return False, f"{pokemon.display_name} is already in the daycare!"
+            return False, f"{esc(pokemon.display_name)} is already in the daycare!"
 
     # Check if Pokemon is available
     if pokemon.is_on_market:
@@ -387,7 +412,7 @@ async def add_to_daycare(
     session.add(daycare_slot)
     await session.flush()
 
-    return True, f"{pokemon.display_name} placed in daycare slot {next_slot}!"
+    return True, f"{esc(pokemon.display_name)} placed in daycare slot {next_slot}!"
 
 
 async def remove_from_daycare(
@@ -405,7 +430,7 @@ async def remove_from_daycare(
         return False, f"No Pokemon in daycare slot {slot_num}."
 
     pokemon = slot.pokemon
-    name = pokemon.display_name if pokemon else f"Pokemon (slot {slot_num})"
+    name = esc(pokemon.display_name) if pokemon else f"Pokemon (slot {slot_num})"
 
     await session.delete(slot)
     await session.flush()

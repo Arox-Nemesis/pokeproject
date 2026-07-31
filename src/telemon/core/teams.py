@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telemon.database.models.team import Team
 from telemon.database.models.user import User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 logger = get_logger(__name__)
 
@@ -156,12 +157,12 @@ async def join_team(
     # Check join policy
     policy = (team.settings or {}).get("join_policy", "open")
     if policy == "invite_only":
-        return None, f"[{team.tag}] {team.name} is invite-only."
+        return None, f"[{esc(team.tag)}] {esc(team.name)} is invite-only."
 
     # Check capacity
     member_count = await _count_members(session, team.id)
     if member_count >= team.max_members:
-        return None, f"[{team.tag}] {team.name} is full ({member_count}/{team.max_members})."
+        return None, f"[{esc(team.tag)}] {esc(team.name)} is full ({member_count}/{team.max_members})."
 
     user.team_id = team.id
     user.team_role = "member"
@@ -195,7 +196,7 @@ async def leave_team(
     user.team_role = None
     await session.commit()
     logger.info("User %d left team [%s]", user_id, team.tag)
-    return True, f"You left [{team.tag}] {team.name}."
+    return True, f"You left [{esc(team.tag)}] {esc(team.name)}."
 
 
 async def kick_member(
@@ -235,7 +236,7 @@ async def kick_member(
 
     tag = team.tag if team else "?"
     logger.info("User %d kicked %d from team [%s]", kicker_id, target_id, tag)
-    return True, f"Kicked {target.display_name} from the team."
+    return True, f"Kicked {esc(target.display_name)} from the team."
 
 
 async def promote_member(
@@ -266,11 +267,11 @@ async def promote_member(
         target.team_role = "leader"
         leader.team_role = "officer"
         await session.commit()
-        return True, f"Leadership transferred to {target.display_name}. You are now an officer."
+        return True, f"Leadership transferred to {esc(target.display_name)}. You are now an officer."
 
     target.team_role = to_role
     await session.commit()
-    return True, f"{target.display_name} promoted to {to_role}."
+    return True, f"{esc(target.display_name)} promoted to {to_role}."
 
 
 async def demote_member(
@@ -294,7 +295,7 @@ async def demote_member(
 
     target.team_role = "member"
     await session.commit()
-    return True, f"{target.display_name} demoted to member."
+    return True, f"{esc(target.display_name)} demoted to member."
 
 
 async def disband_team(
@@ -315,7 +316,7 @@ async def disband_team(
         await session.commit()
         return True, "Team disbanded."
 
-    tag, name = team.tag, team.name
+    tag, name = esc(team.tag), esc(team.name)
 
     # Remove all members
     result = await session.execute(
@@ -472,7 +473,7 @@ async def get_team_info(
 
     # Get leader display name
     leader = await session.get(User, team.leader_id)
-    leader_name = leader.display_name if leader else "Unknown"
+    leader_name = esc(leader.display_name) if leader else "Unknown"
 
     # XP progress to next level
     current_xp = team.xp

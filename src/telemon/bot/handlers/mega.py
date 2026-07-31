@@ -14,6 +14,7 @@ from telemon.core.forms import (
 from telemon.core.items import MEGA_STONE_BY_NAME
 from telemon.database.models import InventoryItem, Pokemon, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="mega")
 logger = get_logger(__name__)
@@ -104,7 +105,7 @@ async def cmd_mega(message: Message, session: AsyncSession, user: User) -> None:
     base_check = get_base_species_for_mega_dex(pokemon.species_id)
     if base_check is not None:
         await message.answer(
-            f"<b>{pokemon.display_name}</b> is already Mega Evolved!\n"
+            f"<b>{esc(pokemon.display_name)}</b> is already Mega Evolved!\n"
             f"Use <code>/demega</code> to revert first."
         )
         return
@@ -113,7 +114,7 @@ async def cmd_mega(message: Message, session: AsyncSession, user: User) -> None:
     mega_forms = get_mega_forms_for_species(pokemon.species_id)
     if not mega_forms:
         await message.answer(
-            f"<b>{pokemon.display_name}</b> cannot Mega Evolve!"
+            f"<b>{esc(pokemon.display_name)}</b> cannot Mega Evolve!"
         )
         return
 
@@ -133,7 +134,7 @@ async def cmd_mega(message: Message, session: AsyncSession, user: User) -> None:
                 for mf in mega_forms
             )
             await message.answer(
-                f"<b>{pokemon.display_name}</b> has multiple Mega forms:\n\n"
+                f"<b>{esc(pokemon.display_name)}</b> has multiple Mega forms:\n\n"
                 f"{form_list}\n\n"
                 f"Use <code>/mega {poke_idx or ''} x</code> or "
                 f"<code>/mega {poke_idx or ''} y</code> to choose."
@@ -146,20 +147,20 @@ async def cmd_mega(message: Message, session: AsyncSession, user: User) -> None:
         move_names = [m.lower() for m in (pokemon.moves or [])]
         if "dragon ascent" not in move_names:
             await message.answer(
-                f"<b>{pokemon.display_name}</b> needs to know "
+                f"<b>{esc(pokemon.display_name)}</b> needs to know "
                 f"<b>Dragon Ascent</b> to Mega Evolve!"
             )
             return
 
         # No stone to consume, just swap species
-        old_name = pokemon.display_name
+        old_name = esc(pokemon.display_name)
         pokemon.species_id = chosen.mega_dex
         await session.commit()
         await session.refresh(pokemon)
 
         await message.answer(
             f"🌀 <b>{old_name}</b> Mega Evolved into "
-            f"<b>{pokemon.display_name}</b>!\n\n"
+            f"<b>{esc(pokemon.display_name)}</b>!\n\n"
             f"<i>Use /demega to revert.</i>"
         )
         logger.info(
@@ -186,14 +187,14 @@ async def cmd_mega(message: Message, session: AsyncSession, user: User) -> None:
     if not inventory_item or inventory_item.quantity < 1:
         await message.answer(
             f"You need a <b>{chosen.mega_stone_display}</b> to Mega Evolve "
-            f"<b>{pokemon.display_name}</b>!\n\n"
+            f"<b>{esc(pokemon.display_name)}</b>!\n\n"
             f"Buy one from the shop: <code>/buy {stone_item_id}</code>"
         )
         return
 
     # Consume stone, swap species, store stone in held_item for /demega
     inventory_item.quantity -= 1
-    old_name = pokemon.display_name
+    old_name = esc(pokemon.display_name)
     pokemon.species_id = chosen.mega_dex
     pokemon.held_item = chosen.mega_stone  # remember which stone was used
     await session.commit()
@@ -201,7 +202,7 @@ async def cmd_mega(message: Message, session: AsyncSession, user: User) -> None:
 
     await message.answer(
         f"🌀 <b>{old_name}</b> Mega Evolved into "
-        f"<b>{pokemon.display_name}</b>!\n\n"
+        f"<b>{esc(pokemon.display_name)}</b>!\n\n"
         f"The <b>{chosen.mega_stone_display}</b> was consumed.\n"
         f"<i>Use /demega to revert and get the stone back.</i>"
     )
@@ -244,14 +245,14 @@ async def cmd_demega(message: Message, session: AsyncSession, user: User) -> Non
     base_info = get_base_species_for_mega_dex(pokemon.species_id)
     if base_info is None:
         await message.answer(
-            f"<b>{pokemon.display_name}</b> is not Mega Evolved!"
+            f"<b>{esc(pokemon.display_name)}</b> is not Mega Evolved!"
         )
         return
 
     base_species_id, stone_name = base_info
 
     # Revert species
-    old_name = pokemon.display_name
+    old_name = esc(pokemon.display_name)
     pokemon.species_id = base_species_id
 
     # Return stone to inventory (if one was used)
@@ -283,7 +284,7 @@ async def cmd_demega(message: Message, session: AsyncSession, user: User) -> Non
     stone_msg = f"\n<b>{returned_stone}</b> returned to your inventory." if returned_stone else ""
     await message.answer(
         f"🔄 <b>{old_name}</b> reverted to "
-        f"<b>{pokemon.display_name}</b>!{stone_msg}"
+        f"<b>{esc(pokemon.display_name)}</b>!{stone_msg}"
     )
     logger.info(
         "De-mega evolution",

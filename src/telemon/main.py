@@ -86,9 +86,21 @@ async def timed_spawn_loop(bot) -> None:
                         from aiogram.exceptions import (
                             TelegramForbiddenError,
                             TelegramBadRequest,
+                            TelegramMigrateToChat,
                         )
                         try:
                             msg_id = await send_spawn_message(bot, group.chat_id, spawn)
+                        except TelegramMigrateToChat as e:
+                            # Group upgraded to a supergroup: re-key it instead
+                            # of retrying the dead id every 60 seconds.
+                            from telemon.core.migration import migrate_chat
+
+                            old_id = group.chat_id
+                            await session.delete(spawn)
+                            await session.commit()
+                            await migrate_chat(session, old_id, e.migrate_to_chat_id)
+                            _reroll_interval(old_id)
+                            continue
                         except (TelegramForbiddenError, TelegramBadRequest) as e:
                             # Fatal: bot was kicked, blocked, or chat deleted
                             await session.delete(spawn)
@@ -144,6 +156,8 @@ async def incense_spawn_loop(bot) -> None:
     group incense (group.incense_spawns_remaining > 0).
     Decrements the counter after each spawn.
     """
+    from datetime import datetime
+
     from sqlalchemy import select
     from telemon.database import async_session_factory
     from telemon.database.models import User, Group
@@ -163,8 +177,9 @@ async def incense_spawn_loop(bot) -> None:
                 for user in users:
                     uid = user.telegram_id
 
-                    # Skip if there's already an uncaught spawn in DM
-                    active = await get_active_spawn(session, uid)
+                    # Skip if there's already an uncaught spawn in DM.  Incense
+                    # uses the short block window -- see INCENSE_BLOCK_SECONDS.
+                    active = await get_active_spawn(session, uid, incense=True)
                     if active:
                         continue
 
@@ -229,7 +244,7 @@ async def incense_spawn_loop(bot) -> None:
                 for group in groups:
                     cid = group.chat_id
 
-                    active = await get_active_spawn(session, cid)
+                    active = await get_active_spawn(session, cid, incense=True)
                     if active:
                         continue
 
@@ -249,9 +264,19 @@ async def incense_spawn_loop(bot) -> None:
                         from aiogram.exceptions import (
                             TelegramForbiddenError,
                             TelegramBadRequest,
+                            TelegramMigrateToChat,
                         )
                         try:
                             msg_id = await send_spawn_message(bot, cid, spawn)
+                        except TelegramMigrateToChat as e:
+                            # Group upgraded to a supergroup mid-incense: move
+                            # the row (incense count included) to the new id.
+                            from telemon.core.migration import migrate_chat
+
+                            await session.delete(spawn)
+                            await session.commit()
+                            await migrate_chat(session, cid, e.migrate_to_chat_id)
+                            continue
                         except (TelegramForbiddenError, TelegramBadRequest):
                             # Fatal: bot was kicked/blocked — stop incense
                             await session.delete(spawn)
@@ -278,6 +303,10 @@ async def incense_spawn_loop(bot) -> None:
                             spawn.message_id = msg_id
                             group.incense_spawns_remaining -= 1
                             group.total_spawns += 1
+                            # Count towards the timed-spawn pacing too, so an
+                            # incense burst doesn't get a timed spawn stacked
+                            # on top of it the moment the block window lapses.
+                            group.last_spawn_at = datetime.utcnow()
                             await session.commit()
                             logger.info(
                                 "Incense group spawn",
@@ -359,6 +388,8 @@ async def trade_expiry_loop(bot) -> None:
 
                     # Notify the chat
                     if trade.chat_id:
+                        from aiogram.exceptions import TelegramMigrateToChat
+
                         try:
                             await bot.send_message(
                                 trade.chat_id,
@@ -366,6 +397,21 @@ async def trade_expiry_loop(bot) -> None:
                                 "The trade was cancelled due to 5 minutes of inactivity.\n"
                                 "All Pok\u00e9mon have been returned.",
                             )
+                        except TelegramMigrateToChat as e:
+                            # Re-key, then deliver to the new supergroup id.
+                            from telemon.core.migration import migrate_chat
+
+                            new_id = e.migrate_to_chat_id
+                            await migrate_chat(session, trade.chat_id, new_id)
+                            try:
+                                await bot.send_message(
+                                    new_id,
+                                    "⏳ <b>Trade Auto-Cancelled</b>\n\n"
+                                    "The trade was cancelled due to 5 minutes of inactivity.\n"
+                                    "All Pok\u00e9mon have been returned.",
+                                )
+                            except Exception:
+                                pass
                         except Exception:
                             pass  # Chat may no longer be accessible
 
@@ -398,6 +444,28 @@ async def main() -> None:
             await load_runtime_config(session)
     except Exception as e:
         logger.warning("Failed to load runtime config from DB", error=str(e))
+
+    # Confirm the regional-form table still matches the species rows it targets.
+    try:
+        from telemon.core import regional
+        from telemon.database import async_session_factory
+
+        async with async_session_factory() as session:
+            await regional.verify_against_db(session)
+    except Exception as e:
+        logger.warning("Failed to verify regional forms", error=str(e))
+
+    # Drop spawn rows that never reached Telegram.  With fleeing disabled these
+    # expire a century out, so a single undelivered row would otherwise count as
+    # that chat's active spawn forever and silently stop all its spawning.
+    try:
+        from telemon.core.spawning import purge_undelivered_spawns
+        from telemon.database import async_session_factory
+
+        async with async_session_factory() as session:
+            await purge_undelivered_spawns(session)
+    except Exception as e:
+        logger.warning("Failed to purge undelivered spawns", error=str(e))
 
     # Create bot and dispatcher
     bot = create_bot()

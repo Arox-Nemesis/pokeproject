@@ -6,60 +6,35 @@ from aiogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from telemon.config import settings
-from telemon.database.models import InventoryItem, PokedexEntry, PokemonSpecies, User
+from telemon.core.shiny import (
+    CHAIN_TIERS,
+    chain_divisor,
+    format_odds,
+    has_shiny_charm,
+    shiny_rate,
+)
+from telemon.database.models import PokedexEntry, PokemonSpecies, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="shinyhunt")
 logger = get_logger(__name__)
 
-# Chain thresholds and their shiny rate multipliers
+# Chain milestones shown in /hunt odds, derived from the odds the catch handler
+# actually rolls (core.shiny) so the table can never drift from the maths.
 CHAIN_THRESHOLDS = [
-    (0, 1, "1/4096"),      # Base rate
-    (10, 1.5, "~1/2731"),  # 10+ chain
-    (25, 2, "1/2048"),     # 25+ chain
-    (50, 2, "1/2048"),     # 50+ (same as 25, but closer to next)
-    (75, 3, "~1/1365"),    # 75+ chain
-    (100, 4, "1/1024"),    # 100+ chain
-    (150, 6, "~1/683"),    # 150+ chain
-    (200, 8, "1/512"),     # 200+ chain (max bonus)
+    (threshold, divisor, format_odds(threshold)) for threshold, divisor in CHAIN_TIERS
 ]
-
-# Shiny Charm item ID (if exists in inventory, gives +2 rerolls)
-SHINY_CHARM_ID = 301
 
 
 def get_chain_info(chain: int) -> tuple[float, str]:
     """Get multiplier and odds string for a chain count."""
-    multiplier = 1.0
-    odds = "1/4096"
-    
-    for threshold, mult, odds_str in CHAIN_THRESHOLDS:
-        if chain >= threshold:
-            multiplier = mult
-            odds = odds_str
-    
-    return multiplier, odds
+    return chain_divisor(chain), format_odds(chain)
 
 
 def calculate_shiny_odds(chain: int, has_charm: bool = False) -> tuple[int, str]:
     """Calculate actual shiny denominator and display string."""
-    base_rate = settings.shiny_base_rate  # 4096
-    
-    # Chain bonus (reduces denominator)
-    if chain >= 200:
-        rate = base_rate // 8  # 512
-    elif chain >= 100:
-        rate = base_rate // 4  # 1024
-    elif chain >= 50:
-        rate = base_rate // 2  # 2048
-    else:
-        rate = base_rate  # 4096
-    
-    # Shiny charm adds rerolls (effectively divides by 3)
-    if has_charm:
-        rate = max(rate // 3, 1)
-    
+    rate = shiny_rate(chain, has_charm)
     return rate, f"1/{rate}"
 
 
@@ -86,17 +61,6 @@ async def get_species_by_query(
         select(PokemonSpecies).where(PokemonSpecies.name.ilike(f"%{query}%")).limit(1)
     )
     return result.scalar_one_or_none()
-
-
-async def has_shiny_charm(session: AsyncSession, user_id: int) -> bool:
-    """Check if user has Shiny Charm in inventory."""
-    result = await session.execute(
-        select(InventoryItem)
-        .where(InventoryItem.user_id == user_id)
-        .where(InventoryItem.item_id == SHINY_CHARM_ID)
-        .where(InventoryItem.quantity > 0)
-    )
-    return result.scalar_one_or_none() is not None
 
 
 @router.message(Command("hunt", "shinyhunt", "sh"))
@@ -166,7 +130,7 @@ async def start_hunt(
     
     if not species:
         await message.answer(
-            f"❌ Pokemon '{species_query}' not found.\n"
+            f"❌ Pokemon '{esc(species_query)}' not found.\n"
             "Use the exact name or Dex number."
         )
         return

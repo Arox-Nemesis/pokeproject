@@ -11,8 +11,10 @@ from telemon.config import CURRENCY_SHORT
 from telemon.core.constants import MAX_FRIENDSHIP
 from telemon.core.emoji import poke_emoji, type_emoji
 from telemon.core.evolution import check_evolution, evolve_pokemon, get_possible_evolutions
+from telemon.core.items import ITEM_BY_NAME
 from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="pokemon")
 logger = get_logger(__name__)
@@ -265,11 +267,11 @@ async def cmd_pokemon(message: Message, session: AsyncSession, user: User) -> No
     if args["favorites"]:
         filter_parts.append("favorites")
     if args["type"]:
-        filter_parts.append(f"type:{args['type']}")
+        filter_parts.append(f"type:{esc(args['type'])}")
     if args["gen"]:
-        filter_parts.append(f"gen:{args['gen']}")
+        filter_parts.append(f"gen:{esc(args['gen'])}")
     if args["name"]:
-        filter_parts.append(f"name:{args['name']}")
+        filter_parts.append(f"name:{esc(args['name'])}")
     
     filter_text = f" [{', '.join(filter_parts)}]" if filter_parts else ""
     sort_text = f" sorted by {order}" if order != "recent" else ""
@@ -315,7 +317,7 @@ async def cmd_pokemon(message: Message, session: AsyncSession, user: User) -> No
         
         # Show species name + nickname if nicknamed
         if poke.nickname:
-            name = f"{poke.nickname} ({poke.species.name})"
+            name = f"{esc(poke.nickname)} ({poke.species.name})"
         else:
             name = poke.species.name
         
@@ -414,11 +416,11 @@ async def cmd_info(message: Message, session: AsyncSession, user: User) -> None:
     else:
         iv_rating = "Poor"
 
-    nickname_line = f'\nNickname: "{poke.nickname}"' if poke.nickname else ""
+    nickname_line = f'\nNickname: "{esc(poke.nickname)}"' if poke.nickname else ""
 
     sprite = poke_emoji(poke.species.national_dex)
     info = f"""\
-{sprite}<b>{poke.display_name}</b>{shiny}{fav}{gender_text}
+{sprite}<b>{esc(poke.display_name)}</b>{shiny}{fav}{gender_text}
 {poke.species.name} #{inv_idx} | Gen {poke.species.generation}{nickname_line}
 
 <b>Type:</b> {type_text}
@@ -481,7 +483,7 @@ async def cmd_select(message: Message, session: AsyncSession, user: User) -> Non
     shiny = " ✨" if poke.is_shiny else ""
     sprite = poke_emoji(poke.species.national_dex)
     await message.answer(
-        f"{sprite}Selected <b>{poke.display_name}</b>{shiny} (Lv.{poke.level}) as your active Pokemon!"
+        f"{sprite}Selected <b>{esc(poke.display_name)}</b>{shiny} (Lv.{poke.level}) as your active Pokemon!"
     )
 
 
@@ -509,7 +511,7 @@ async def cmd_nickname(message: Message, session: AsyncSession, user: User) -> N
         return
 
     if new_name.lower() == "clear":
-        old_name = poke.nickname or poke.species.name
+        old_name = esc(poke.nickname or poke.species.name)
         poke.nickname = None
         await session.commit()
         await message.answer(f"Cleared nickname for <b>{poke.species.name}</b>!")
@@ -524,12 +526,12 @@ async def cmd_nickname(message: Message, session: AsyncSession, user: User) -> N
         await message.answer("Nickname cannot be empty!")
         return
 
-    old_name = poke.display_name
+    old_name = esc(poke.display_name)
     poke.nickname = new_name[:30]
     await session.commit()
 
     await message.answer(
-        f"Renamed <b>{old_name}</b> to <b>{new_name}</b>! ({poke.species.name})"
+        f"Renamed <b>{old_name}</b> to <b>{esc(new_name)}</b>! ({poke.species.name})"
     )
 
 
@@ -553,9 +555,9 @@ async def cmd_favorite(message: Message, session: AsyncSession, user: User) -> N
     await session.commit()
 
     if poke.is_favorite:
-        await message.answer(f"❤️ <b>{poke.display_name}</b> is now a favorite!")
+        await message.answer(f"❤️ <b>{esc(poke.display_name)}</b> is now a favorite!")
     else:
-        await message.answer(f"<b>{poke.display_name}</b> removed from favorites.")
+        await message.answer(f"<b>{esc(poke.display_name)}</b> removed from favorites.")
 
 
 @router.message(Command("release"))
@@ -602,7 +604,7 @@ async def cmd_release(message: Message, session: AsyncSession, user: User) -> No
     builder.adjust(2)
 
     await message.answer(
-        f"Are you sure you want to release <b>{poke.display_name}</b> "
+        f"Are you sure you want to release <b>{esc(poke.display_name)}</b> "
         f"(Lv.{poke.level}, {poke.iv_percentage}% IV)?\n"
         "This cannot be undone!",
         reply_markup=builder.as_markup(),
@@ -644,7 +646,7 @@ async def callback_release(
             await callback.answer()
             return
 
-        name = poke.display_name
+        name = esc(poke.display_name)
         await session.delete(poke)
         await session.commit()
 
@@ -749,11 +751,11 @@ async def callback_pokemon_page(
     if args["favorites"]:
         filter_parts.append("favorites")
     if args["type"]:
-        filter_parts.append(f"type:{args['type']}")
+        filter_parts.append(f"type:{esc(args['type'])}")
     if args["gen"]:
-        filter_parts.append(f"gen:{args['gen']}")
+        filter_parts.append(f"gen:{esc(args['gen'])}")
     if args["name"]:
-        filter_parts.append(f"name:{args['name']}")
+        filter_parts.append(f"name:{esc(args['name'])}")
 
     filter_text = f" [{', '.join(filter_parts)}]" if filter_parts else ""
     sort_text = f" sorted by {order}" if order != "recent" else ""
@@ -791,7 +793,7 @@ async def callback_pokemon_page(
         fav = "❤️ " if poke.is_favorite else ""
         
         if poke.nickname:
-            name = f"{poke.nickname} ({poke.species.name})"
+            name = f"{esc(poke.nickname)} ({poke.species.name})"
         else:
             name = poke.species.name
 
@@ -871,15 +873,40 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
         )
         return
 
+    # The trailing text is an item name ("fire stone") for item evolutions, or
+    # the name of one branch ("umbreon") when a Pokemon can evolve several ways.
+    target_species_id = None
+    if item_name and item_name.lower().strip() not in ITEM_BY_NAME:
+        wanted = item_name.lower().strip()
+        candidates = get_possible_evolutions(poke.species_id)
+        names = await session.execute(
+            select(PokemonSpecies.national_dex, PokemonSpecies.name_lower).where(
+                PokemonSpecies.national_dex.in_([e["evolves_to"] for e in candidates])
+            )
+        )
+        for dex, name_lower in names.all():
+            if name_lower == wanted or name_lower.replace("-", " ") == wanted:
+                target_species_id = dex
+                item_name = None
+                break
+
     # Check evolution possibilities
     evo_result = await check_evolution(
-        session, poke, user.telegram_id, use_item=item_name
+        session,
+        poke,
+        user.telegram_id,
+        use_item=item_name,
+        target_species_id=target_species_id,
     )
 
     if evo_result.can_evolve:
         # Attempt evolution
         success, message_text = await evolve_pokemon(
-            session, poke, user.telegram_id, use_item=item_name
+            session,
+            poke,
+            user.telegram_id,
+            use_item=item_name,
+            target_species_id=target_species_id,
         )
 
         if success:
@@ -950,17 +977,32 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
 
         # Show available evolutions
         if len(evolutions) > 1:
+            # Name each branch — the player needs the name to pick one with
+            # /evolve [num] [name].
+            target_names = await session.execute(
+                select(PokemonSpecies.national_dex, PokemonSpecies.name).where(
+                    PokemonSpecies.national_dex.in_(
+                        [e["evolves_to"] for e in evolutions]
+                    )
+                )
+            )
+            name_by_dex = dict(target_names.all())
+
             lines.append("\n<b>Possible Evolutions:</b>")
             for evo in evolutions:
                 trigger = evo["trigger"]
+                target = name_by_dex.get(evo["evolves_to"], "?")
                 if trigger == "level":
-                    lines.append(f"  Level {evo.get('min_level', '?')}+")
+                    req = f"Level {evo.get('min_level', '?')}+"
                 elif trigger == "item":
-                    lines.append(f"  {evo.get('item', 'Unknown item').title()}")
+                    req = evo.get("item", "Unknown item").title()
                 elif trigger == "trade":
-                    lines.append(f"  Trade")
+                    req = "Trade"
                 elif trigger == "friendship":
-                    lines.append(f"  High Friendship")
+                    req = "High Friendship"
+                else:
+                    req = trigger
+                lines.append(f"  <b>{target}</b> — {req}")
 
         await message.answer("\n".join(lines))
 

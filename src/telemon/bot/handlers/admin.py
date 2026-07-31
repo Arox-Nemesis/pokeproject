@@ -15,6 +15,7 @@ from telemon.core.spawning import create_spawn, get_random_species
 from telemon.database.models import ActiveSpawn, BotConfig, Group, Pokemon, PokemonSpecies, SpawnAdmin, User
 from telemon.database.models.spawn_admin import SPAWN_PERMISSIONS
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="admin")
 logger = get_logger(__name__)
@@ -425,7 +426,7 @@ async def _resolve_species(
                 except ValueError:
                     pass
                 if not species:
-                    return None, f"Pokemon '{args['name']}' not found."
+                    return None, f"Pokemon '{esc(args['name'])}' not found."
 
         # Block Mega forms — they must only be acquired via /mega
         if species and species.name_lower.startswith("mega "):
@@ -448,25 +449,11 @@ async def _resolve_species(
         )
 
     if args["rarity"]:
-        rarity = args["rarity"]
-        if rarity == "legendary":
-            filters.append(PokemonSpecies.is_legendary == True)
-            filters.append(PokemonSpecies.is_mythical == False)
-        elif rarity == "mythical":
-            filters.append(PokemonSpecies.is_mythical == True)
-        elif rarity == "ultra_rare":
-            filters.append(PokemonSpecies.catch_rate <= 3)
-            filters.append(PokemonSpecies.is_legendary == False)
-            filters.append(PokemonSpecies.is_mythical == False)
-        elif rarity == "rare":
-            filters.append(PokemonSpecies.catch_rate > 3)
-            filters.append(PokemonSpecies.catch_rate <= 45)
-            filters.append(PokemonSpecies.is_legendary == False)
-        elif rarity == "uncommon":
-            filters.append(PokemonSpecies.catch_rate > 45)
-            filters.append(PokemonSpecies.catch_rate <= 120)
-        elif rarity == "common":
-            filters.append(PokemonSpecies.catch_rate > 120)
+        # Reuse the spawn engine's tier definition so /spawn and wild spawns
+        # can never disagree about what counts as e.g. "rare".
+        from telemon.core.spawning.engine import _rarity_condition
+
+        filters.append(_rarity_condition(args["rarity"]))
 
     if filters:
         for f in filters:
@@ -602,9 +589,9 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
             # Build log details
             details: list[str] = [species.name]
             if args["gen"]:
-                details.append(f"gen:{args['gen']}")
+                details.append(f"gen:{esc(args['gen'])}")
             if args["type"]:
-                details.append(f"type:{args['type']}")
+                details.append(f"type:{esc(args['type'])}")
             if args["rarity"]:
                 details.append(args["rarity"])
             if args["shiny"]:
@@ -652,7 +639,7 @@ async def cmd_add_spawner(message: Message, session: AsyncSession) -> None:
     # Check if already exists
     existing = await get_spawn_admin(session, target_user_id)
     if existing:
-        await message.answer(f"User {target_username} is already a spawn admin!")
+        await message.answer(f"User {esc(target_username)} is already a spawn admin!")
         return
 
     spawn_admin = SpawnAdmin(
@@ -664,7 +651,7 @@ async def cmd_add_spawner(message: Message, session: AsyncSession) -> None:
     await session.commit()
 
     await message.answer(
-        f"Added <b>{target_username}</b> as a spawn admin!\n"
+        f"Added <b>{esc(target_username)}</b> as a spawn admin!\n"
         f"Permissions: <b>random only</b>\n\n"
         f"Use <code>/grant {target_user_id} [perm]</code> to add permissions.\n"
         f"Available: name, gen, type, rarity, shiny, all"
@@ -692,7 +679,7 @@ async def cmd_remove_spawner(message: Message, session: AsyncSession) -> None:
 
     existing = await get_spawn_admin(session, target_user_id)
     if not existing:
-        await message.answer(f"User {target_username} is not a spawn admin!")
+        await message.answer(f"User {esc(target_username)} is not a spawn admin!")
         return
 
     await session.execute(
@@ -700,7 +687,7 @@ async def cmd_remove_spawner(message: Message, session: AsyncSession) -> None:
     )
     await session.commit()
 
-    await message.answer(f"Removed {target_username} from spawn admins!")
+    await message.answer(f"Removed {esc(target_username)} from spawn admins!")
     logger.info("Removed spawn admin", user_id=target_user_id, removed_by=message.from_user.id)
 
 
@@ -1013,7 +1000,7 @@ async def cmd_settings(message: Message, session: AsyncSession) -> None:
 
     settings_text = f"""
 <b>Group Settings</b>
-{message.chat.title}
+{esc(message.chat.title)}
 
 <b>Spawning</b>
 Enabled: {'Yes' if group.spawn_enabled else 'No'}

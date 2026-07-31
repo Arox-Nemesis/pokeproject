@@ -14,6 +14,7 @@ from telemon.core.moves import (
 )
 from telemon.database.models import Pokemon, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="moves")
 logger = get_logger(__name__)
@@ -73,13 +74,13 @@ async def cmd_moves(message: Message, session: AsyncSession, user: User) -> None
 
     if not known:
         await message.answer(
-            f"<b>{poke.display_name}</b> doesn't know any moves yet.\n"
+            f"<b>{esc(poke.display_name)}</b> doesn't know any moves yet.\n"
             "Use /learn [move] to teach it a move, or catch a new Pokemon (moves are auto-assigned)."
         )
         return
 
     lines = [
-        f"<b>{poke.display_name}</b> — Moves\n",
+        f"<b>{esc(poke.display_name)}</b> — Moves\n",
     ]
 
     for i, move in enumerate(known, 1):
@@ -177,7 +178,7 @@ async def cmd_learnable(message: Message, session: AsyncSession, user: User) -> 
 
     if not learnable:
         await message.answer(
-            f"<b>{poke.display_name}</b> has no level-up moves available.\n"
+            f"<b>{esc(poke.display_name)}</b> has no level-up moves available.\n"
             "<i>This species may not have learnset data yet.</i>"
         )
         return
@@ -186,7 +187,7 @@ async def cmd_learnable(message: Message, session: AsyncSession, user: User) -> 
     known_lower = set(m.lower() for m in (poke.moves or []))
 
     lines = [
-        f"<b>{poke.display_name}</b> — Learnable Moves (Lv.{poke.level})\n",
+        f"<b>{esc(poke.display_name)}</b> — Learnable Moves (Lv.{poke.level})\n",
     ]
 
     for entry in learnable:

@@ -23,6 +23,7 @@ from telemon.core.breeding import (
 from telemon.core.constants import BREED_COOLDOWN_SECONDS, iv_percentage
 from telemon.database.models import Pokemon, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="breeding")
 logger = get_logger(__name__)
@@ -165,7 +166,7 @@ async def _daycare_status(
                 shiny = " ✨" if pokemon.is_shiny else ""
                 iv_pct = pokemon.iv_percentage
                 lines.append(
-                    f"Slot {slot.slot}: <b>{pokemon.display_name}</b>{shiny} "
+                    f"Slot {slot.slot}: <b>{esc(pokemon.display_name)}</b>{shiny} "
                     f"(Lv.{pokemon.level} | {iv_pct:.1f}% IV)"
                 )
             else:

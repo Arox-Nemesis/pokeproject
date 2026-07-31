@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiogram import Bot
 
+from telemon.core.text import esc
 from telemon.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,7 +37,7 @@ async def notify_market_sale(
         bot,
         seller_id,
         f"<b>Market Sale!</b>\n\n"
-        f"Your <b>{pokemon_name}</b> was purchased by {buyer_name} "
+        f"Your <b>{pokemon_name}</b> was purchased by {esc(buyer_name)} "
         f"for <b>{price:,} TC</b>!\n\n"
         f"The coins have been added to your balance.",
     )

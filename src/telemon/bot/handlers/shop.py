@@ -25,6 +25,7 @@ from telemon.core.constants import MAX_FRIENDSHIP, MAX_LEVEL, MAX_IV_TOTAL
 from telemon.core.emoji import item_emoji
 from telemon.database.models import InventoryItem, Item, Pokemon, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="shop")
 logger = get_logger(__name__)
@@ -51,7 +52,7 @@ SHOP_CATEGORIES: dict[str, dict] = {
     "evo_items": {
         "emoji": "🔗",
         "title": "Evo Items",
-        "items": [i for i in ALL_ITEMS if i["category"] == "evolution" and 11 <= i["id"] <= 29],
+        "items": [i for i in ALL_ITEMS if i["category"] == "evolution" and 11 <= i["id"] <= 40],
     },
     "battle": {
         "emoji": "⚔️",
@@ -542,7 +543,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
                 )
             else:
                 await message.answer(
-                    f"Cannot use Linking Cord on {poke.display_name}.\n{msg}"
+                    f"Cannot use Linking Cord on {esc(poke.display_name)}.\n{msg}"
                 )
             return
 
@@ -559,7 +560,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             )
         else:
             await message.answer(
-                f"Cannot use {item.name} on {poke.display_name}.\n{msg}"
+                f"Cannot use {item.name} on {esc(poke.display_name)}.\n{msg}"
             )
         return
 
@@ -578,20 +579,20 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             return
 
         if poke.level >= MAX_LEVEL:
-            await message.answer(f"{poke.display_name} is already at max level ({MAX_LEVEL})!")
+            await message.answer(f"{esc(poke.display_name)} is already at max level ({MAX_LEVEL})!")
             return
 
         # Calculate how many can actually be used
         levels_available = MAX_LEVEL - poke.level  # room to grow
         if levels_available <= 0:
-            await message.answer(f"{poke.display_name} is already at max level ({MAX_LEVEL})!")
+            await message.answer(f"{esc(poke.display_name)} is already at max level ({MAX_LEVEL})!")
             return
 
         max_usable = min(inventory_item.quantity, levels_available)
         amount = min(use_qty, max_usable)
 
         if amount <= 0:
-            await message.answer(f"{poke.display_name} is already at max level ({MAX_LEVEL})!")
+            await message.answer(f"{esc(poke.display_name)} is already at max level ({MAX_LEVEL})!")
             return
 
         old_level = poke.level
@@ -602,10 +603,10 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
         lines = [
             f"<b>Rare Candy ×{amount} Used!</b>\n",
-            f"{poke.display_name} grew from Lv.{old_level} → Lv.{poke.level}!",
+            f"{esc(poke.display_name)} grew from Lv.{old_level} → Lv.{poke.level}!",
         ]
         if poke.level >= MAX_LEVEL:
-            lines.append(f"\n🎉 {poke.display_name} reached the max level!")
+            lines.append(f"\n🎉 {esc(poke.display_name)} reached the max level!")
         lines.append(f"\n<i>Rare Candies remaining: {inventory_item.quantity}</i>")
 
         await message.answer("\n".join(lines))
@@ -628,7 +629,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         evo_result = await check_evolution(session, poke, user.telegram_id)
         if evo_result.can_evolve and evo_result.trigger == "level":
             await message.answer(
-                f"✨ {poke.display_name} is ready to evolve! Use /evolve to evolve it."
+                f"✨ {esc(poke.display_name)} is ready to evolve! Use /evolve to evolve it."
             )
         return
 
@@ -647,7 +648,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
         await message.answer(
             f"<b>Soothe Bell</b>\n\n"
-            f"{poke.display_name} is now holding a Soothe Bell!\n"
+            f"{esc(poke.display_name)} is now holding a Soothe Bell!\n"
             f"Friendship gains are doubled while holding this item.\n\n"
             f"Current friendship: {poke.friendship}/{MAX_FRIENDSHIP}"
         )
@@ -701,7 +702,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
             await message.answer(
                 "🟢 <b>Group Incense Activated!</b>\n\n"
-                f"Activated by {user.display_name}\n"
+                f"Activated by {esc(user.display_name)}\n"
                 f"<b>{spawn_count}</b> Pokémon will spawn every 10 seconds!\n\n"
                 f"<i>Incense remaining: {inventory_item.quantity}</i>"
             )
@@ -777,7 +778,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
         await message.answer(
             f"<b>{item.name} Equipped!</b>\n\n"
-            f"{poke.display_name} is now holding {item.name}."
+            f"{esc(poke.display_name)} is now holding {item.name}."
         )
         return
 
@@ -797,7 +798,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
         warning = ""
         if not mega:
             warning = (
-                f"\n\n<i>Note: {poke.display_name} cannot mega evolve "
+                f"\n\n<i>Note: {esc(poke.display_name)} cannot mega evolve "
                 f"with this stone. It may work on a different Pokemon.</i>"
             )
 
@@ -806,7 +807,7 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
 
         await message.answer(
             f"<b>{item.name} Equipped!</b>\n\n"
-            f"{poke.display_name} is now holding {item.name}.{warning}"
+            f"{esc(poke.display_name)} is now holding {item.name}.{warning}"
         )
         return
 
@@ -981,7 +982,7 @@ async def cmd_pet(message: Message, session: AsyncSession, user: User) -> None:
 
     if poke.friendship >= MAX_FRIENDSHIP:
         await message.answer(
-            f"{poke.display_name} already has maximum friendship! ({MAX_FRIENDSHIP}/{MAX_FRIENDSHIP})\n"
+            f"{esc(poke.display_name)} already has maximum friendship! ({MAX_FRIENDSHIP}/{MAX_FRIENDSHIP})\n"
             f"❤️ Your bond couldn't be stronger!"
         )
         return
@@ -1001,7 +1002,7 @@ async def cmd_pet(message: Message, session: AsyncSession, user: User) -> None:
     hearts = "❤️" * min(5, poke.friendship // 50)
 
     response = (
-        f"You pet <b>{poke.display_name}</b>!\n"
+        f"You pet <b>{esc(poke.display_name)}</b>!\n"
         f"Friendship: {poke.friendship}/{MAX_FRIENDSHIP} (+{actual_gain}{bell_text})\n"
         f"{hearts}"
     )
@@ -1018,7 +1019,7 @@ async def cmd_pet(message: Message, session: AsyncSession, user: User) -> None:
     # Check if can evolve with friendship now
     evo_result = await check_evolution(session, poke, user.telegram_id)
     if evo_result.can_evolve and evo_result.trigger == "friendship":
-        response += f"\n\n{poke.display_name} is ready to evolve! Use /evolve to evolve it."
+        response += f"\n\n{esc(poke.display_name)} is ready to evolve! Use /evolve to evolve it."
 
     await message.answer(response)
 

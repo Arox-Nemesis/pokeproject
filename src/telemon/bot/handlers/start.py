@@ -14,6 +14,7 @@ from telemon.database.models import Pokemon, PokemonSpecies, User
 from telemon.config import BOT_NAME, CURRENCY_NAME
 from telemon.core.constants import NATURES, STARTER_LEVEL, STARTER_IV_FLOOR, MAX_IV, MAX_IV_TOTAL, determine_gender, iv_percentage, random_nature
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="start")
 logger = get_logger(__name__)
@@ -93,7 +94,7 @@ async def cmd_start(message: Message, session: AsyncSession, user: User) -> None
         # Returning user with Pokemon
         await message.answer(
             RETURNING_MESSAGE.format(
-                name=user.display_name,
+                name=esc(user.display_name),
                 pokemon_count=pokemon_count,
                 balance=user.balance,
             )
@@ -193,7 +194,7 @@ async def callback_starter_selection(
 
         # Edit the original message
         await callback.message.edit_text(
-            f"<b>Congratulations, {user.display_name}!</b>\n\n"
+            f"<b>Congratulations, {esc(user.display_name)}!</b>\n\n"
             f"You chose <b>{species.name}</b> as your starter!\n"
             f"Lv.5 | IV: {iv_percent}% | {nature.capitalize()} | {ability} | {gender or 'Unknown'}\n\n"
             f"<i>Add me to a group chat to start catching more Pokemon!</i>\n"

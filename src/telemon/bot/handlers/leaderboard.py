@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telemon.config import CURRENCY_SHORT
 from telemon.database.models import PokedexEntry, Pokemon, User
 from telemon.logging import get_logger
+from telemon.core.text import esc
 
 router = Router(name="leaderboard")
 logger = get_logger(__name__)
@@ -78,7 +79,7 @@ async def get_catches_leaderboard(
             select(User).where(User.telegram_id.in_(user_ids))
         )
         user_map = {
-            u.telegram_id: u.display_name for u in user_result.scalars().all()
+            u.telegram_id: esc(u.display_name) for u in user_result.scalars().all()
         }
     
     entries = []
@@ -120,7 +121,7 @@ async def get_wealth_leaderboard(
         entries.append({
             "rank": offset + i + 1,
             "user_id": user.telegram_id,
-            "username": user.display_name,
+            "username": esc(user.display_name),
             "value": user.balance,
             "label": CURRENCY_SHORT,
         })
@@ -165,7 +166,7 @@ async def get_pokedex_leaderboard(
             select(User).where(User.telegram_id.in_(user_ids))
         )
         user_map = {
-            u.telegram_id: u.display_name for u in user_result.scalars().all()
+            u.telegram_id: esc(u.display_name) for u in user_result.scalars().all()
         }
     
     entries = []
@@ -218,7 +219,7 @@ async def get_shiny_leaderboard(
             select(User).where(User.telegram_id.in_(user_ids))
         )
         user_map = {
-            u.telegram_id: u.display_name for u in user_result.scalars().all()
+            u.telegram_id: esc(u.display_name) for u in user_result.scalars().all()
         }
     
     entries = []
@@ -261,7 +262,7 @@ async def get_battles_leaderboard(
         entries.append({
             "rank": offset + i + 1,
             "user_id": user.telegram_id,
-            "username": user.display_name,
+            "username": esc(user.display_name),
             "value": user.battle_wins,
             "label": f"wins ({win_rate})",
         })
@@ -296,7 +297,7 @@ async def get_rating_leaderboard(
         entries.append({
             "rank": offset + i + 1,
             "user_id": user.telegram_id,
-            "username": user.display_name,
+            "username": esc(user.display_name),
             "value": user.battle_rating,
             "label": f"rating ({user.battle_wins}W/{user.battle_losses}L)",
         })
@@ -341,7 +342,7 @@ async def get_group_leaderboard(
             select(User).where(User.telegram_id.in_(user_ids))
         )
         user_map = {
-            u.telegram_id: u.display_name for u in user_result.scalars().all()
+            u.telegram_id: esc(u.display_name) for u in user_result.scalars().all()
         }
     
     entries = []
@@ -362,32 +363,24 @@ async def get_user_rank(
 ) -> int | None:
     """Get a user's rank in a specific leaderboard."""
     if lb_type == LeaderboardType.CATCHES:
-        # Count users with more Pokemon
         user_count_result = await session.execute(
             select(func.count(Pokemon.id))
             .where(Pokemon.owner_id == user_id)
         )
         user_count = user_count_result.scalar() or 0
-        
-        rank_result = await session.execute(
-            select(func.count(func.distinct(Pokemon.owner_id)))
-            .where(
-                select(func.count(Pokemon.id))
-                .where(Pokemon.owner_id == Pokemon.owner_id)
-                .correlate(Pokemon)
-                .scalar_subquery() > user_count
-            )
-        )
-        # Simplified: just get position
-        all_counts = await session.execute(
-            select(Pokemon.owner_id, func.count(Pokemon.id).label("cnt"))
+
+        if user_count == 0:
+            return None
+
+        # Count trainers holding strictly more Pokemon; rank is that plus one.
+        counts = (
+            select(func.count(Pokemon.id).label("cnt"))
             .group_by(Pokemon.owner_id)
-            .order_by(func.count(Pokemon.id).desc())
+            .having(func.count(Pokemon.id) > user_count)
+            .subquery()
         )
-        for i, (uid, _) in enumerate(all_counts.all()):
-            if uid == user_id:
-                return i + 1
-        return None
+        ahead_result = await session.execute(select(func.count()).select_from(counts))
+        return (ahead_result.scalar() or 0) + 1
     
     elif lb_type == LeaderboardType.WEALTH:
         user_result = await session.execute(
@@ -692,7 +685,7 @@ async def handle_leaderboard_callback(
 @router.message(Command("rank", "myrank"))
 async def cmd_rank(message: Message, session: AsyncSession, user: User) -> None:
     """Show user's ranks across all leaderboards."""
-    lines = [f"📊 <b>{user.display_name}'s Rankings</b>\n"]
+    lines = [f"📊 <b>{esc(user.display_name)}'s Rankings</b>\n"]
     
     # Get Pokemon count
     pokemon_result = await session.execute(

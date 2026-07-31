@@ -94,13 +94,31 @@ def _is_valid_message(message: Message) -> bool:
     return True
 
 
+def _is_media_restriction(error: Exception) -> bool:
+    """Whether a BadRequest means "this chat won't take media from bots".
+
+    Telegram phrases the group-permission refusal as ``not enough rights to
+    send photos to the chat``; the same class of error covers pinned media
+    restrictions.  It says nothing about text messages, which still go
+    through, so it must not be treated as a fatal "bot was removed" error.
+    """
+    text = str(error).lower()
+    return "send photos" in text or "send media" in text
+
+
 async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int | None:
     """Send a spawn message with Pokemon image and return message ID.
 
     Raises Telegram API errors (Forbidden, BadRequest, etc.) so callers
     can decide whether the failure is fatal or transient.  Only local
     errors (image generation, I/O) are swallowed and result in ``None``.
+
+    Groups that restrict media for bots reject the photo with a
+    ``not enough rights to send photos`` BadRequest; those chats can still
+    receive plain text, so the photo failure falls back to a text spawn
+    instead of getting the whole group's spawning disabled.
     """
+    from aiogram.exceptions import TelegramBadRequest
     from aiogram.types import BufferedInputFile
     from telemon.core.imaging import generate_spawn_image
 
@@ -139,22 +157,31 @@ async def send_spawn_message(bot: Bot, chat_id: int, spawn: ActiveSpawn) -> int 
 
     # Send to Telegram — let API errors propagate to the caller so it
     # can distinguish fatal (bot kicked) from transient (rate-limit).
+    photo: str | BufferedInputFile | None = None
     if image_data:
         photo = BufferedInputFile(
             file=image_data.read(),
             filename=f"spawn_{species.national_dex}.jpg",
         )
-        msg = await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption=caption,
-        )
     elif species.sprite_url:
-        msg = await bot.send_photo(
-            chat_id=chat_id,
-            photo=species.sprite_url,
-            caption=caption,
-        )
+        photo = species.sprite_url
+
+    if photo is not None:
+        try:
+            msg = await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=caption,
+            )
+        except TelegramBadRequest as e:
+            if not _is_media_restriction(e):
+                raise
+            logger.info(
+                "Media blocked in chat, falling back to text spawn",
+                chat_id=chat_id,
+                error=str(e),
+            )
+            msg = await bot.send_message(chat_id=chat_id, text=caption)
     else:
         msg = await bot.send_message(
             chat_id=chat_id,
@@ -277,9 +304,20 @@ async def track_group_message(
                 from aiogram.exceptions import (
                     TelegramForbiddenError,
                     TelegramBadRequest,
+                    TelegramMigrateToChat,
                 )
                 try:
                     msg_id = await send_spawn_message(bot, chat_id, spawn)
+                except TelegramMigrateToChat as e:
+                    # The group became a supergroup: its chat_id changed and
+                    # the old one is dead forever.  Re-key and let the next
+                    # message in the new chat trigger a spawn.
+                    from telemon.core.migration import migrate_chat
+
+                    await session.delete(spawn)
+                    await session.commit()
+                    await migrate_chat(session, chat_id, e.migrate_to_chat_id)
+                    return
                 except (TelegramForbiddenError, TelegramBadRequest) as e:
                     # Fatal: bot was kicked/blocked — disable spawns
                     await session.delete(spawn)
