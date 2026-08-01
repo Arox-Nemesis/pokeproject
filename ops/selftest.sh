@@ -109,15 +109,48 @@ cleanup() {
     return
   fi
   echo "cleaning up..."
-  # Remove the publication we created on the live primary. Leaving it behind
-  # would create a replication slot that retains WAL forever.
+  # Order matters. Dropping the SUBSCRIPTION on the mirror is what releases the
+  # slot on the primary; killing the mirror container first leaves the slot
+  # behind as inactive, and an inactive logical slot retains WAL on the PRIMARY
+  # forever. That is how a test suite fills the production disk — it reached
+  # 11 GB before being caught.
+  if docker inspect -f '{{.State.Running}}' "$MIRROR_CONTAINER" 2>/dev/null | grep -q true; then
+    docker exec "$MIRROR_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -Atq </dev/null \
+      -c "ALTER SUBSCRIPTION selftest_sub DISABLE;" >/dev/null 2>&1 || true
+    docker exec "$MIRROR_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -Atq </dev/null \
+      -c "ALTER SUBSCRIPTION selftest_sub SET (slot_name = NONE);" >/dev/null 2>&1 || true
+    docker exec "$MIRROR_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -Atq </dev/null \
+      -c "DROP SUBSCRIPTION selftest_sub;" >/dev/null 2>&1 || true
+  fi
+
   PSQL "DROP PUBLICATION IF EXISTS selftest_pub;" >/dev/null 2>&1 || true
-  PSQL "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE 'selftest%' AND NOT active;" >/dev/null 2>&1 || true
+  # Terminate any walsender still holding the slot, then drop it regardless of
+  # active state — `AND NOT active` was the original bug: the slot was still
+  # active at cleanup time, so it survived and went inactive afterwards.
+  PSQL "SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots
+        WHERE slot_name LIKE 'selftest%' AND active_pid IS NOT NULL;" >/dev/null 2>&1 || true
+  sleep 2
+  PSQL "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
+        WHERE slot_name LIKE 'selftest%';" >/dev/null 2>&1 || true
+
   PSQL "DROP TABLE IF EXISTS _selftest_proof;" >/dev/null 2>&1 || true
   PSQL "DROP TABLE IF EXISTS _selftest_seq;" >/dev/null 2>&1 || true
   docker rm -f "$MIRROR_CONTAINER" "$STANDBY_CONTAINER" telemon_selftest_restore >/dev/null 2>&1 || true
   rm -rf "$SANDBOX"
-  echo "done"
+
+  # Fail loudly if anything survived. A leaked slot silently fills the primary's
+  # disk over hours, so "cleanup probably worked" is not good enough.
+  LEFT="$(PSQL "SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE 'selftest%';" 2>/dev/null || echo '?')"
+  if [[ "${LEFT:-0}" != "0" ]]; then
+    echo
+    echo "🚨 WARNING: $LEFT selftest replication slot(s) SURVIVED cleanup."
+    echo "   These retain WAL on the primary indefinitely and WILL fill the disk."
+    echo "   Drop them now:"
+    echo "     docker exec $PG_CONTAINER psql -U $PG_USER -d $PG_DB -c \\"
+    echo "       \"SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE 'selftest%';\""
+  else
+    echo "done (no replication slots left behind)"
+  fi
 }
 trap cleanup EXIT
 

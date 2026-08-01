@@ -64,12 +64,29 @@ if pg_running; then
   fi
   say "archive lag         : ${LAG}s"
 
-  # pg_wal growth is the canary for a stuck archiver.
+  # pg_wal growth is a symptom with two very different causes. Naming the wrong
+  # one costs real time: this alerted "archiving is almost certainly stuck" for
+  # 9 hours while archiving was healthy and an orphaned replication slot was
+  # the actual cause. Diagnose before blaming.
   mark "pg_wal du"
   WAL_SIZE="$(dex exec "$PG_CONTAINER" du -sm /var/lib/postgresql/data/pg_wal | cut -f1)"
   say "pg_wal size         : ${WAL_SIZE:-?} MB"
-  if [[ -n "${WAL_SIZE:-}" && "$WAL_SIZE" =~ ^[0-9]+$ && "$WAL_SIZE" -gt 4096 ]]; then
-    PROBLEMS+=("pg_wal has grown to ${WAL_SIZE} MB — archiving is almost certainly stuck")
+  if [[ -n "${WAL_SIZE:-}" && "$WAL_SIZE" =~ ^[0-9]+$ && "$WAL_SIZE" -gt 2048 ]]; then
+    # Which is it: a stalled archiver, or a slot pinning WAL?
+    SLOT_INFO="$(psql_q "
+      SELECT string_agg(slot_name||' (active='||active||', retaining '||
+             pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn))||')', '; ')
+      FROM pg_replication_slots;" 2>/dev/null)"
+    ARCH_STALLED=0
+    [[ "${LAG:-0}" =~ ^[0-9]+$ && "${LAG:-0}" -gt 300 ]] && ARCH_STALLED=1
+
+    if [[ -n "$SLOT_INFO" ]]; then
+      PROBLEMS+=("pg_wal has grown to ${WAL_SIZE} MB and a REPLICATION SLOT is retaining it: ${SLOT_INFO}. If that slot is inactive its consumer is gone and it will pin WAL until the disk fills. Drop it with: SELECT pg_drop_replication_slot('<name>');")
+    elif [[ "$ARCH_STALLED" -eq 1 ]]; then
+      PROBLEMS+=("pg_wal has grown to ${WAL_SIZE} MB and the archiver is stalled (last success ${LAG}s ago) — segments cannot be recycled until archiving resumes")
+    else
+      PROBLEMS+=("pg_wal has grown to ${WAL_SIZE} MB, but archiving is healthy (${LAG}s lag) and no replication slot is holding it. Likely a heavy write burst versus max_wal_size, or a long-running transaction. Check: SELECT pid, state, xact_start FROM pg_stat_activity WHERE xact_start < now() - interval '1 hour';")
+    fi
   fi
 else
   PROBLEMS+=("postgres container '$PG_CONTAINER' is not running")
@@ -180,6 +197,27 @@ if dex inspect -f '{{.State.Running}}' "${BOT_CONTAINER:-telemon_bot}" | grep -q
   fi
 else
   say "schema drift        : skipped (bot container not running)"
+fi
+
+# ---------------------------------------------------------------------------
+# Orphaned replication slots
+# ---------------------------------------------------------------------------
+# Checked unconditionally, NOT delegated to mirror_status.sh: that only runs
+# when a mirror is configured, so a slot left behind by a test, an abandoned
+# experiment, or a deleted mirror goes unnoticed — exactly how 11 GB of WAL
+# accumulated here. An inactive slot pins WAL until the disk fills and Postgres
+# stops accepting writes.
+mark "replication slots"
+say ""
+ORPHANS="$(psql_q "
+  SELECT string_agg(slot_name||' ('||pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn))||')', '; ')
+  FROM pg_replication_slots WHERE NOT active;" 2>/dev/null)"
+SLOT_TOTAL="$(psql_q "SELECT count(*) FROM pg_replication_slots;" 2>/dev/null || echo '?')"
+if [[ -n "$ORPHANS" ]]; then
+  say "replication slots   : ⚠ INACTIVE: $ORPHANS"
+  PROBLEMS+=("INACTIVE replication slot(s) are pinning WAL on the primary: ${ORPHANS}. Their consumer is gone; they will retain WAL until the disk fills and Postgres stops accepting writes. Drop with: SELECT pg_drop_replication_slot('<name>');")
+else
+  say "replication slots   : ${SLOT_TOTAL:-0} (none inactive)"
 fi
 
 # ---------------------------------------------------------------------------
