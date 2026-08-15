@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AnyUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ------------------------------------------------------------------ #
@@ -32,6 +32,24 @@ class Settings(BaseSettings):
     # Bot Configuration
     bot_token: str = Field(..., description="Telegram Bot API token")
     bot_username: str = Field(default="pokevault_bot", description="Bot username")
+
+    # Access Control
+    group_only_enabled: bool = Field(
+        default=True,
+        description="When enabled, bot commands and callbacks are only processed in groups.",
+    )
+    force_sub_enabled: bool = Field(
+        default=False,
+        description="Require every user to belong to FORCE_SUB_CHAT_ID before using the bot.",
+    )
+    force_sub_chat_id: int | str | None = Field(
+        default=None,
+        description="Telegram chat/channel ID or @username users must join before using the bot.",
+    )
+    force_sub_url: AnyUrl | None = Field(
+        default=None,
+        description="Public invite/username URL shown when a user is not subscribed.",
+    )
 
     # Database Configuration
     database_url: str = Field(
