@@ -1,1 +1,1 @@
-worker: python -m telemon.main
+worker: PYTHONPATH=src python -m telemon.main
