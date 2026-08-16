@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ------------------------------------------------------------------ #
@@ -32,6 +32,38 @@ class Settings(BaseSettings):
     # Bot Configuration
     bot_token: str = Field(..., description="Telegram Bot API token")
     bot_username: str = Field(default="pokevault_bot", description="Bot username")
+    telegram_api_id: int | None = Field(
+        default=None,
+        description=(
+            "Optional Telegram API ID for MTProto/client integrations; "
+            "not required for the aiogram Bot API runtime."
+        ),
+    )
+    telegram_api_hash: str | None = Field(
+        default=None,
+        description=(
+            "Optional Telegram API hash for MTProto/client integrations; "
+            "not required for the aiogram Bot API runtime."
+        ),
+    )
+
+    # Access Control
+    group_only_enabled: bool = Field(
+        default=True,
+        description="When enabled, bot commands and callbacks are only processed in groups.",
+    )
+    force_sub_enabled: bool = Field(
+        default=False,
+        description="Require every user to belong to FORCE_SUB_CHAT_ID before using the bot.",
+    )
+    force_sub_chat_id: int | str | None = Field(
+        default=None,
+        description="Telegram chat/channel ID or @username users must join before using the bot.",
+    )
+    force_sub_url: AnyUrl | None = Field(
+        default=None,
+        description="Public invite/username URL shown when a user is not subscribed.",
+    )
 
     # Database Configuration
     database_url: str = Field(
@@ -42,6 +74,20 @@ class Settings(BaseSettings):
         default="redis://localhost:6380/0",
         description="Redis connection URL",
     )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        """Normalize Heroku/Postgres URLs to SQLAlchemy asyncpg URLs."""
+        if not value:
+            return value
+
+        database_url = str(value)
+        if database_url.startswith("postgres://"):
+            return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        if database_url.startswith("postgresql://"):
+            return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return database_url
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)

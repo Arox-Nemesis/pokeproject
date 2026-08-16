@@ -12,6 +12,8 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
 - **Global Market** - Buy and sell Pokemon on the marketplace
 - **Shop & Items** - Purchase evolution stones, battle items, and more
 - **Shiny Hunting** - Build chains to improve shiny odds
+- **Group-only gameplay** - Commands and callbacks are processed in Telegram groups only
+- **Force subscription** - Optionally require users to join a channel/group before playing
 
 ## Tech Stack
 
@@ -50,14 +52,22 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
    ```bash
    cp .env.example .env
    # Edit .env and add your BOT_TOKEN
+   # Optional: set TELEGRAM_API_ID and TELEGRAM_API_HASH only if you add MTProto/client integrations
+   # Optional: set FORCE_SUB_ENABLED=true, FORCE_SUB_CHAT_ID, and FORCE_SUB_URL
    ```
 
-4. **Run database migrations**
+4. **Database URL on Heroku**
+   ```bash
+   # Heroku Postgres usually provides DATABASE_URL as postgres://...
+   # The app automatically normalizes it to postgresql+asyncpg://... at runtime.
+   ```
+
+5. **Run database migrations**
    ```bash
    alembic upgrade head
    ```
 
-5. **Import Pokemon data**
+6. **Import Pokemon data**
    ```bash
    # Download data from PokeAPI (takes 15-30 minutes)
    python scripts/import_pokemon_data.py
@@ -66,7 +76,7 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
    python scripts/seed_database.py
    ```
 
-6. **Start the bot**
+7. **Start the bot**
    ```bash
    python -m telemon.main
    ```
@@ -85,6 +95,24 @@ telemon/
 ├── alembic/              # Database migrations
 └── tests/                # Test suite
 ```
+
+## Telegram configuration
+
+The bot runtime uses aiogram and only requires `BOT_TOKEN` for Telegram Bot API access. `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are available as optional config variables for future MTProto/client integrations, but the current bot code does not consume them.
+
+## Telegram access rules
+
+By default, the bot only responds in Telegram groups and supergroups. Private chats receive an instruction to add the bot to a group.
+
+To require every player to join a channel or group before using the bot, set:
+
+```env
+FORCE_SUB_ENABLED=true
+FORCE_SUB_CHAT_ID=@yourchannel
+FORCE_SUB_URL=https://t.me/yourchannel
+```
+
+The bot must be able to call `getChatMember` for `FORCE_SUB_CHAT_ID`; add it to the required group/channel with suitable access.
 
 ## Commands
 
