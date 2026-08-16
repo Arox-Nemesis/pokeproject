@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     # Bot Configuration
     bot_token: str = Field(..., description="Telegram Bot API token")
     bot_username: str = Field(default="pokevault_bot", description="Bot username")
+    telegram_api_id: int | None = Field(
+        default=None,
+        description=(
+            "Optional Telegram API ID for MTProto/client integrations; "
+            "not required for the aiogram Bot API runtime."
+        ),
+    )
+    telegram_api_hash: str | None = Field(
+        default=None,
+        description=(
+            "Optional Telegram API hash for MTProto/client integrations; "
+            "not required for the aiogram Bot API runtime."
+        ),
+    )
 
     # Access Control
     group_only_enabled: bool = Field(

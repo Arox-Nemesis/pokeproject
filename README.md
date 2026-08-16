@@ -52,6 +52,7 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
    ```bash
    cp .env.example .env
    # Edit .env and add your BOT_TOKEN
+   # Optional: set TELEGRAM_API_ID and TELEGRAM_API_HASH only if you add MTProto/client integrations
    # Optional: set FORCE_SUB_ENABLED=true, FORCE_SUB_CHAT_ID, and FORCE_SUB_URL
    ```
 
@@ -88,6 +89,10 @@ telemon/
 ├── alembic/              # Database migrations
 └── tests/                # Test suite
 ```
+
+## Telegram configuration
+
+The bot runtime uses aiogram and only requires `BOT_TOKEN` for Telegram Bot API access. `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are available as optional config variables for future MTProto/client integrations, but the current bot code does not consume them.
 
 ## Telegram access rules
 
