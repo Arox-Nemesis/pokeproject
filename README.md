@@ -56,10 +56,15 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
    # Optional: set FORCE_SUB_ENABLED=true, FORCE_SUB_CHAT_ID, and FORCE_SUB_URL
    ```
 
-4. **Database URL on Heroku**
+4. **Managed database/Redis URLs**
    ```bash
-   # Heroku Postgres usually provides DATABASE_URL as postgres://...
-   # The app automatically normalizes it to postgresql+asyncpg://... at runtime.
+   # Heroku/Neon Postgres URLs such as postgres://... or postgresql://...?sslmode=require
+   # are automatically normalized to postgresql+asyncpg://... at runtime.
+   # sslmode=require becomes asyncpg SSL settings, and unsupported asyncpg
+   # query options such as channel_binding are stripped before connecting.
+
+   # Upstash Redis TLS URLs should use rediss://...; redis://...upstash.io URLs
+   # are automatically upgraded to rediss://... for redis-py.
    ```
 
 5. **Run database migrations**

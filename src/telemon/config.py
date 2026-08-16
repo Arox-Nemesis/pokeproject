@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -84,10 +85,51 @@ class Settings(BaseSettings):
 
         database_url = str(value)
         if database_url.startswith("postgres://"):
-            return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
-        if database_url.startswith("postgresql://"):
-            return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return database_url
+            database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        parts = urlsplit(database_url)
+        query_items = parse_qsl(parts.query, keep_blank_values=True)
+        normalized_query: list[tuple[str, str]] = []
+        for key, item_value in query_items:
+            if key == "sslmode":
+                if item_value.lower() in {"require", "verify-ca", "verify-full"}:
+                    normalized_query.append(("ssl", "true"))
+                continue
+            normalized_query.append((key, item_value))
+
+        return urlunsplit(parts._replace(query=urlencode(normalized_query)))
+
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def normalize_redis_url(cls, value: str) -> str:
+        """Normalize managed Redis TLS URLs to redis-py rediss URLs."""
+        if not value:
+            return value
+
+        redis_url = str(value)
+        parts = urlsplit(redis_url)
+        query_items = parse_qsl(parts.query, keep_blank_values=True)
+        query = dict(query_items)
+        wants_tls = (
+            parts.scheme == "rediss"
+            or parts.hostname is not None
+            and parts.hostname.endswith("upstash.io")
+            or query.get("ssl", "").lower() in {"1", "true", "yes", "require"}
+            or query.get("tls", "").lower() in {"1", "true", "yes", "require"}
+        )
+        if not wants_tls or parts.scheme != "redis":
+            return redis_url
+
+        normalized_query = [
+            (key, item_value)
+            for key, item_value in query_items
+            if key not in {"ssl", "tls"}
+        ]
+        return urlunsplit(
+            parts._replace(scheme="rediss", query=urlencode(normalized_query))
+        )
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)

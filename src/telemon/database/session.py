@@ -3,6 +3,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -12,13 +13,40 @@ from sqlalchemy.ext.asyncio import (
 
 from telemon.config import settings
 
+_ASYNC_PG_STRIP_QUERY_KEYS = {"channel_binding", "gssencmode"}
+
+
+def _build_database_engine_options() -> tuple[URL, dict]:
+    """Build SQLAlchemy engine URL/options, adapting managed Postgres URLs for asyncpg."""
+    url = make_url(str(settings.database_url))
+    connect_args = {}
+
+    ssl_value = url.query.get("ssl") or url.query.get("sslmode")
+    if isinstance(ssl_value, str) and ssl_value.lower() in {
+        "1",
+        "true",
+        "require",
+        "verify-ca",
+        "verify-full",
+    }:
+        connect_args["ssl"] = True
+        url = url.difference_update_query(["ssl", "sslmode"])
+
+    url = url.difference_update_query(_ASYNC_PG_STRIP_QUERY_KEYS)
+
+    return url, {"connect_args": connect_args} if connect_args else {}
+
+
+_database_url, _database_options = _build_database_engine_options()
+
 # Create async engine
 engine: AsyncEngine = create_async_engine(
-    str(settings.database_url),
+    _database_url,
     echo=settings.debug,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    **_database_options,
 )
 
 # Create async session factory
