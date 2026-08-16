@@ -2,8 +2,9 @@
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field
+from pydantic import AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ------------------------------------------------------------------ #
@@ -32,6 +33,38 @@ class Settings(BaseSettings):
     # Bot Configuration
     bot_token: str = Field(..., description="Telegram Bot API token")
     bot_username: str = Field(default="pokevault_bot", description="Bot username")
+    telegram_api_id: int | None = Field(
+        default=None,
+        description=(
+            "Optional Telegram API ID for MTProto/client integrations; "
+            "not required for the aiogram Bot API runtime."
+        ),
+    )
+    telegram_api_hash: str | None = Field(
+        default=None,
+        description=(
+            "Optional Telegram API hash for MTProto/client integrations; "
+            "not required for the aiogram Bot API runtime."
+        ),
+    )
+
+    # Access Control
+    group_only_enabled: bool = Field(
+        default=True,
+        description="When enabled, bot commands and callbacks are only processed in groups.",
+    )
+    force_sub_enabled: bool = Field(
+        default=False,
+        description="Require every user to belong to FORCE_SUB_CHAT_ID before using the bot.",
+    )
+    force_sub_chat_id: int | str | None = Field(
+        default=None,
+        description="Telegram chat/channel ID or @username users must join before using the bot.",
+    )
+    force_sub_url: AnyUrl | None = Field(
+        default=None,
+        description="Public invite/username URL shown when a user is not subscribed.",
+    )
 
     # Database Configuration
     database_url: str = Field(
@@ -42,6 +75,61 @@ class Settings(BaseSettings):
         default="redis://localhost:6380/0",
         description="Redis connection URL",
     )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        """Normalize Heroku/Postgres URLs to SQLAlchemy asyncpg URLs."""
+        if not value:
+            return value
+
+        database_url = str(value)
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        parts = urlsplit(database_url)
+        query_items = parse_qsl(parts.query, keep_blank_values=True)
+        normalized_query: list[tuple[str, str]] = []
+        for key, item_value in query_items:
+            if key == "sslmode":
+                if item_value.lower() in {"require", "verify-ca", "verify-full"}:
+                    normalized_query.append(("ssl", "true"))
+                continue
+            normalized_query.append((key, item_value))
+
+        return urlunsplit(parts._replace(query=urlencode(normalized_query)))
+
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def normalize_redis_url(cls, value: str) -> str:
+        """Normalize managed Redis TLS URLs to redis-py rediss URLs."""
+        if not value:
+            return value
+
+        redis_url = str(value)
+        parts = urlsplit(redis_url)
+        query_items = parse_qsl(parts.query, keep_blank_values=True)
+        query = dict(query_items)
+        wants_tls = (
+            parts.scheme == "rediss"
+            or parts.hostname is not None
+            and parts.hostname.endswith("upstash.io")
+            or query.get("ssl", "").lower() in {"1", "true", "yes", "require"}
+            or query.get("tls", "").lower() in {"1", "true", "yes", "require"}
+        )
+        if not wants_tls or parts.scheme != "redis":
+            return redis_url
+
+        normalized_query = [
+            (key, item_value)
+            for key, item_value in query_items
+            if key not in {"ssl", "tls"}
+        ]
+        return urlunsplit(
+            parts._replace(scheme="rediss", query=urlencode(normalized_query))
+        )
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)
