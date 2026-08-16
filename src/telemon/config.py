@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AnyUrl, Field
+from pydantic import AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ------------------------------------------------------------------ #
@@ -74,6 +74,20 @@ class Settings(BaseSettings):
         default="redis://localhost:6380/0",
         description="Redis connection URL",
     )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        """Normalize Heroku/Postgres URLs to SQLAlchemy asyncpg URLs."""
+        if not value:
+            return value
+
+        database_url = str(value)
+        if database_url.startswith("postgres://"):
+            return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        if database_url.startswith("postgresql://"):
+            return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return database_url
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)

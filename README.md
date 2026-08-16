@@ -56,12 +56,18 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
    # Optional: set FORCE_SUB_ENABLED=true, FORCE_SUB_CHAT_ID, and FORCE_SUB_URL
    ```
 
-4. **Run database migrations**
+4. **Database URL on Heroku**
+   ```bash
+   # Heroku Postgres usually provides DATABASE_URL as postgres://...
+   # The app automatically normalizes it to postgresql+asyncpg://... at runtime.
+   ```
+
+5. **Run database migrations**
    ```bash
    alembic upgrade head
    ```
 
-5. **Import Pokemon data**
+6. **Import Pokemon data**
    ```bash
    # Download data from PokeAPI (takes 15-30 minutes)
    python scripts/import_pokemon_data.py
@@ -70,7 +76,7 @@ A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
    python scripts/seed_database.py
    ```
 
-6. **Start the bot**
+7. **Start the bot**
    ```bash
    python -m telemon.main
    ```
