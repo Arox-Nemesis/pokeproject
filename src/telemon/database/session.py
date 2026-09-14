@@ -41,21 +41,6 @@ def _build_database_engine_options(database_url: str | None = None) -> tuple[URL
 
     ssl_value = url.query.get("ssl") or url.query.get("sslmode")
     if isinstance(ssl_value, str) and ssl_value.lower() in _ASYNC_PG_SSL_QUERY_VALUES:
-
-
-def _build_database_engine_options() -> tuple[URL, dict]:
-    """Build SQLAlchemy engine URL/options, adapting managed Postgres URLs for asyncpg."""
-    url = make_url(str(settings.database_url))
-    connect_args = {}
-
-    ssl_value = url.query.get("ssl") or url.query.get("sslmode")
-    if isinstance(ssl_value, str) and ssl_value.lower() in {
-        "1",
-        "true",
-        "require",
-        "verify-ca",
-        "verify-full",
-    }:
         connect_args["ssl"] = True
         url = url.difference_update_query(["ssl", "sslmode"])
 
@@ -121,3 +106,4 @@ async def init_db() -> None:
 async def close_db() -> None:
     """Close database connection."""
     await engine.dispose()
+    
