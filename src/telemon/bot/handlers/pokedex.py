@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from telemon.core.constants import MAX_GENERATION
+from telemon.core.constants import MAX_GENERATION, ULTRA_BEAST_DEX
 from telemon.core.emoji import poke_emoji, type_emoji
 from telemon.core.forms import get_mega_forms
 from telemon.database.models import PokedexEntry, Pokemon, PokemonSpecies, User
@@ -22,7 +22,17 @@ router = Router(name="pokedex")
 logger = get_logger(__name__)
 
 # Known form prefixes to strip when searching
-FORM_PREFIXES = ("mega", "alolan", "galarian", "hisuian", "paldean", "galar", "alola", "hisui", "paldea")
+FORM_PREFIXES = (
+    "mega",
+    "alolan",
+    "galarian",
+    "hisuian",
+    "paldean",
+    "galar",
+    "alola",
+    "hisui",
+    "paldea",
+)
 
 # Constants
 ENTRIES_PER_PAGE = 10
@@ -124,16 +134,13 @@ async def get_gen_counts(session: AsyncSession) -> dict[int, int]:
     return dict(result.all())
 
 
-async def get_pokedex_stats(
-    session: AsyncSession, user_id: int, gen: int | None = None
-) -> dict:
+async def get_pokedex_stats(session: AsyncSession, user_id: int, gen: int | None = None) -> dict:
     """Get pokedex completion statistics for a user, optionally by generation."""
     # Get species IDs in this gen (if filtered)
     gen_filter = None
     if gen is not None:
         gen_species = await session.execute(
-            select(PokemonSpecies.national_dex)
-            .where(PokemonSpecies.generation == gen)
+            select(PokemonSpecies.national_dex).where(PokemonSpecies.generation == gen)
         )
         gen_filter = [s for s in gen_species.scalars().all()]
 
@@ -253,6 +260,16 @@ async def get_pokedex_entries(
             filtered_entries.append(entry_data)
         elif filter_type == "seen" and seen and not caught:
             filtered_entries.append(entry_data)
+        elif filter_type == "legendary" and species.is_legendary:
+            filtered_entries.append(entry_data)
+        elif filter_type == "mythical" and species.is_mythical:
+            filtered_entries.append(entry_data)
+        elif filter_type == "rare" and (
+            not species.is_legendary and not species.is_mythical and 4 <= species.catch_rate <= 45
+        ):
+            filtered_entries.append(entry_data)
+        elif filter_type == "ultra_beast" and species.national_dex in ULTRA_BEAST_DEX:
+            filtered_entries.append(entry_data)
 
     # Paginate
     total_count = len(filtered_entries)
@@ -272,7 +289,7 @@ def resolve_form_query(query: str) -> tuple[str, str | None]:
     q = query.strip().lower()
     for prefix in FORM_PREFIXES:
         if q.startswith(prefix + " "):
-            base = q[len(prefix):].strip()
+            base = q[len(prefix) :].strip()
             # Normalise prefix to canonical form
             canonical = prefix
             if canonical in ("alola",):
@@ -287,29 +304,26 @@ def resolve_form_query(query: str) -> tuple[str, str | None]:
     return query.strip(), None
 
 
-async def get_species_by_name_or_number(
-    session: AsyncSession, query: str
-) -> PokemonSpecies | None:
+async def get_species_by_name_or_number(session: AsyncSession, query: str) -> PokemonSpecies | None:
     """Find a Pokemon species by name or dex number.
 
     Priority: exact match → starts-with → contains.
     Uses the full multi-word query to avoid false matches.
     """
     query = query.strip()
+    # Accept familiar Pokédex notation such as /pokedex #025.
+    if query.startswith("#"):
+        query = query[1:].strip()
 
     # Try as number first
     if query.isdigit():
         result = await session.execute(
-            select(PokemonSpecies)
-            .where(PokemonSpecies.national_dex == int(query))
+            select(PokemonSpecies).where(PokemonSpecies.national_dex == int(query))
         )
         return result.scalar_one_or_none()
 
     # 1. Exact match (case-insensitive)
-    result = await session.execute(
-        select(PokemonSpecies)
-        .where(PokemonSpecies.name.ilike(query))
-    )
+    result = await session.execute(select(PokemonSpecies).where(PokemonSpecies.name.ilike(query)))
     species = result.scalar_one_or_none()
     if species:
         return species
@@ -360,6 +374,10 @@ def build_pokedex_keyboard(
         ("Caught", "caught"),
         ("Missing", "missing"),
         ("Shiny", "shiny"),
+        ("Rare", "rare"),
+        ("Legendary", "legendary"),
+        ("Mythical", "mythical"),
+        ("Ultra Beast", "ultra_beast"),
     ]
 
     for text, ftype in filter_buttons:
@@ -367,7 +385,7 @@ def build_pokedex_keyboard(
         style = "primary" if filter_type == ftype else None
         builder.button(text=display, callback_data=f"dex:filter:{ftype}:1:{gen_str}", style=style)
 
-    builder.adjust(3, 4)  # 3 nav buttons, 4 filter buttons
+    builder.adjust(3, 4, 4)  # navigation plus category filters
 
     return builder
 
@@ -429,15 +447,30 @@ async def cmd_pokedex(message: Message, session: AsyncSession, user: User) -> No
         return
 
     if sub in ("list", "all"):
-        await show_pokedex_list(message, session, user, filter_type="all", page=args["page"], gen=gen)
+        await show_pokedex_list(
+            message, session, user, filter_type="all", page=args["page"], gen=gen
+        )
     elif sub in ("caught", "owned"):
-        await show_pokedex_list(message, session, user, filter_type="caught", page=args["page"], gen=gen)
+        await show_pokedex_list(
+            message, session, user, filter_type="caught", page=args["page"], gen=gen
+        )
     elif sub in ("missing", "uncaught", "needed"):
-        await show_pokedex_list(message, session, user, filter_type="missing", page=args["page"], gen=gen)
+        await show_pokedex_list(
+            message, session, user, filter_type="missing", page=args["page"], gen=gen
+        )
     elif sub in ("shiny", "shinies"):
-        await show_pokedex_list(message, session, user, filter_type="shiny", page=args["page"], gen=gen)
+        await show_pokedex_list(
+            message, session, user, filter_type="shiny", page=args["page"], gen=gen
+        )
     elif sub in ("seen",):
-        await show_pokedex_list(message, session, user, filter_type="seen", page=args["page"], gen=gen)
+        await show_pokedex_list(
+            message, session, user, filter_type="seen", page=args["page"], gen=gen
+        )
+    elif sub in ("rare", "legendary", "mythical", "ultra_beast", "ultrabeast", "ub"):
+        filter_type = "ultra_beast" if sub in ("ultrabeast", "ub") else sub
+        await show_pokedex_list(
+            message, session, user, filter_type=filter_type, page=args["page"], gen=gen
+        )
     elif sub in ("search", "find"):
         # Rejoin subcommand + query for multi-word searches like "search Mega Charizard X"
         full_query = args["query"]
@@ -564,8 +597,7 @@ async def show_pokedex_list(
         }
         gen_text = f" in Gen {gen}" if gen else ""
         await message.answer(
-            f"📕 <b>Pokédex</b>\n\n"
-            f"No {filter_names.get(filter_type, 'entries')}{gen_text} found!"
+            f"📕 <b>Pokédex</b>\n\nNo {filter_names.get(filter_type, 'entries')}{gen_text} found!"
         )
         return
 
@@ -577,6 +609,7 @@ async def show_pokedex_list(
     sent = await message.answer(text, reply_markup=keyboard.as_markup())
 
     from telemon.bot.handlers._button_owner import set_owner
+
     set_owner(sent.message_id, user.telegram_id)
 
 
@@ -607,9 +640,7 @@ def format_pokedex_list_text(
     return "\n".join(lines)
 
 
-async def _build_evolution_chain_text(
-    session: AsyncSession, species: PokemonSpecies
-) -> str:
+async def _build_evolution_chain_text(session: AsyncSession, species: PokemonSpecies) -> str:
     """Build a 'Bulbasaur → Ivysaur → Venusaur' style evolution chain line."""
     import json
     from pathlib import Path
@@ -636,8 +667,9 @@ async def _build_evolution_chain_text(
 
         # Fetch names from DB
         result = await session.execute(
-            select(PokemonSpecies.national_dex, PokemonSpecies.name)
-            .where(PokemonSpecies.national_dex.in_(species_ids))
+            select(PokemonSpecies.national_dex, PokemonSpecies.name).where(
+                PokemonSpecies.national_dex.in_(species_ids)
+            )
         )
         id_to_name: dict[int, str] = {row[0]: row[1] for row in result.all()}
 
@@ -693,9 +725,7 @@ async def _build_evolution_chain_text(
         return "<b>Evolution:</b> —"
 
 
-async def pokedex_search(
-    message: Message, session: AsyncSession, user: User, query: str
-) -> None:
+async def pokedex_search(message: Message, session: AsyncSession, user: User, query: str) -> None:
     """Search for and display a specific Pokemon entry.
 
     Handles form prefixes (Mega, Alolan, etc.) and shows a paginated
@@ -718,9 +748,7 @@ async def pokedex_search(
         if megas:
             start_page = "forms"
 
-    text, keyboard = await _build_entry_page(
-        session, species, user.telegram_id, start_page
-    )
+    text, keyboard = await _build_entry_page(session, species, user.telegram_id, start_page)
 
     # Try to send with artwork image (overview only)
     if start_page == "overview":
@@ -739,7 +767,8 @@ async def pokedex_search(
                     filename=f"dex_{species.national_dex}.jpg",
                 )
                 await message.answer_photo(
-                    photo=photo, caption=text,
+                    photo=photo,
+                    caption=text,
                     reply_markup=keyboard.as_markup() if keyboard else None,
                 )
                 return
@@ -755,6 +784,7 @@ async def pokedex_search(
 # ──────────────────────────────────────────────────────
 # Paginated single-entry builder
 # ──────────────────────────────────────────────────────
+
 
 async def _build_entry_page(
     session: AsyncSession,
@@ -945,7 +975,14 @@ def _entry_page_forms(
             types = mf.type1.title()
             if mf.type2:
                 types += f" / {mf.type2.title()}"
-            bst = mf.base_hp + mf.base_attack + mf.base_defense + mf.base_sp_attack + mf.base_sp_defense + mf.base_speed
+            bst = (
+                mf.base_hp
+                + mf.base_attack
+                + mf.base_defense
+                + mf.base_sp_attack
+                + mf.base_sp_defense
+                + mf.base_speed
+            )
             stone_text = f"  Stone: {mf.mega_stone_display}" if mf.mega_stone_display else ""
             lines.append(
                 f"🔥 <b>{mf.form_name}</b>\n"
@@ -969,6 +1006,7 @@ async def handle_dexentry_callback(
 ) -> None:
     """Handle pagination between entry pages (overview/details/forms)."""
     from telemon.bot.handlers._button_owner import check_owner
+
     if not check_owner(callback.message.message_id, callback.from_user.id):
         await callback.answer("These buttons aren't for you!", show_alert=True)
         return
@@ -1053,6 +1091,7 @@ async def handle_pokedex_callback(
 ) -> None:
     """Handle pokedex pagination and filter callbacks."""
     from telemon.bot.handlers._button_owner import check_owner
+
     if not check_owner(callback.message.message_id, callback.from_user.id):
         await callback.answer("These buttons aren't for you!", show_alert=True)
         return

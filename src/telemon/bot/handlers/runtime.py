@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from redis.asyncio import Redis
 
-from telemon.config import BOT_OWNER_ID, settings
+from telemon.config import settings
 from telemon.logging import get_logger
 
 router = Router(name="runtime")
@@ -21,7 +21,7 @@ async def cmd_restart(message: Message) -> None:
     Since ``./src`` is volume-mounted into the container, a restart
     automatically picks up any local code changes without a rebuild.
     """
-    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+    if not message.from_user or message.from_user.id != settings.owner_id:
         return  # silently ignore non-owners
 
     logger.info(
@@ -52,7 +52,7 @@ async def cmd_rebuild(message: Message) -> None:
     when dependencies in ``pyproject.toml`` change — code changes are
     picked up by a plain ``/restart`` via the volume mount.
     """
-    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+    if not message.from_user or message.from_user.id != settings.owner_id:
         return  # silently ignore non-owners
 
     logger.info(

@@ -25,12 +25,12 @@ logger = get_logger(__name__)
 #
 # Keep this list strictly descending: rarer tier => smaller per-species weight.
 PER_SPECIES_WEIGHT = {
-    "common": 100.0,     # catch_rate > 120
-    "uncommon": 55.0,    # catch_rate 46-120
-    "rare": 18.0,        # catch_rate 4-45
-    "ultra_rare": 8.0,   # catch_rate 1-3
-    "legendary": 2.5,    # is_legendary
-    "mythical": 2.0,     # is_mythical
+    "common": 100.0,  # catch_rate > 120
+    "uncommon": 55.0,  # catch_rate 46-120
+    "rare": 18.0,  # catch_rate 4-45
+    "ultra_rare": 8.0,  # catch_rate 1-3
+    "legendary": 2.5,  # is_legendary
+    "mythical": 2.0,  # is_mythical
 }
 
 # How long the per-tier species counts stay cached, in seconds.  The species
@@ -160,9 +160,7 @@ async def roll_rarity(session: AsyncSession) -> str:
     return random.choices(tiers, weights=weights, k=1)[0]
 
 
-async def _maybe_regional(
-    session: AsyncSession, species: PokemonSpecies
-) -> PokemonSpecies:
+async def _maybe_regional(session: AsyncSession, species: PokemonSpecies) -> PokemonSpecies:
     """Occasionally swap ``species`` for one of its regional variants.
 
     Regional forms live at dex >= 10000 and so can never be picked by the tier
@@ -291,16 +289,21 @@ async def create_spawn(
     session.add(spawn)
 
     # Update group stats
-    result = await session.execute(
-        select(Group).where(Group.chat_id == chat_id)
-    )
+    result = await session.execute(select(Group).where(Group.chat_id == chat_id))
     group = result.scalar_one_or_none()
 
     if group:
+        from telemon.bot.handlers.admin import get_group_runtime_config
+
         group.message_count = 0
         # Randomize next spawn threshold so users can't predict exact count
         group.spawn_threshold = random.randint(
-            settings.spawn_threshold_min, settings.spawn_threshold_max
+            int(
+                get_group_runtime_config(group, "spawn_threshold_min", settings.spawn_threshold_min)
+            ),
+            int(
+                get_group_runtime_config(group, "spawn_threshold_max", settings.spawn_threshold_max)
+            ),
         )
         # Note: group.total_spawns and group.last_spawn_at are updated by
         # the caller only AFTER confirming the spawn message was delivered.
@@ -380,9 +383,7 @@ async def purge_undelivered_spawns(session: AsyncSession) -> int:
 async def check_spawn_trigger(session: AsyncSession, chat_id: int) -> bool:
     """Check if a spawn should be triggered for a chat."""
     # Get group settings
-    result = await session.execute(
-        select(Group).where(Group.chat_id == chat_id)
-    )
+    result = await session.execute(select(Group).where(Group.chat_id == chat_id))
     group = result.scalar_one_or_none()
 
     if not group or not group.spawn_enabled:
@@ -402,10 +403,20 @@ async def check_spawn_trigger(session: AsyncSession, chat_id: int) -> bool:
         return True
 
     # Check time-based spawn (if enough time has passed and some activity)
+    from telemon.bot.handlers.admin import get_group_runtime_config
+
     if group.last_spawn_at and group.message_count > 5:
         time_since_last = datetime.utcnow() - group.last_spawn_at
-        min_time = timedelta(minutes=settings.spawn_time_min_minutes)
-        max_time = timedelta(minutes=settings.spawn_time_max_minutes)
+        min_time = timedelta(
+            minutes=get_group_runtime_config(
+                group, "spawn_time_min_minutes", settings.spawn_time_min_minutes
+            )
+        )
+        max_time = timedelta(
+            minutes=get_group_runtime_config(
+                group, "spawn_time_max_minutes", settings.spawn_time_max_minutes
+            )
+        )
 
         if time_since_last > min_time:
             # Random chance increases as we approach max time
