@@ -135,6 +135,13 @@ class Settings(BaseSettings):
             (key, item_value) for key, item_value in query_items if key not in {"ssl", "tls"}
         ]
         return urlunsplit(parts._replace(scheme="rediss", query=urlencode(normalized_query)))
+            (key, item_value)
+            for key, item_value in query_items
+            if key not in {"ssl", "tls"}
+        ]
+        return urlunsplit(
+            parts._replace(scheme="rediss", query=urlencode(normalized_query))
+        )
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)
