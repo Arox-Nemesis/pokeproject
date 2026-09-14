@@ -54,6 +54,10 @@ async def timed_spawn_loop(bot) -> None:
                 now = datetime.utcnow()
 
                 for group in groups:
+                    # Never overlap visible spawns.  This check comes before
+                    # both timed and owner-queued work so a queued batch behaves
+                    # like incense: as soon as the previous Pokémon clears, the
+                    # next one is eligible on the next loop tick.
                     interval_mins = _get_interval(group.chat_id)
                     # First quiet spawn is three minutes after the bot joined.
                     # Subsequent spawns have a fixed 10-minute catch window,
@@ -70,6 +74,9 @@ async def timed_spawn_loop(bot) -> None:
                     if active:
                         continue
 
+                    queued = (group.settings or {}).get("forced_spawn_queue")
+                    is_queued_spawn = bool(queued and queued.get("remaining", 0) > 0)
+                    if is_queued_spawn:
                     # Owner batch spawns are persisted in group settings so they
                     # survive restarts.  The next queued Pokémon is delivered
                     # only after the previous one has been caught or expired.
@@ -84,10 +91,25 @@ async def timed_spawn_loop(bot) -> None:
                             settings_data = dict(group.settings or {})
                             settings_data.pop("forced_spawn_queue", None)
                             group.settings = settings_data
+                            await session.commit()
                             logger.warning(
                                 "Cancelled invalid forced spawn queue", chat_id=group.chat_id
                             )
                             continue
+                        interval_mins = 0.0
+                    else:
+                        interval_mins = _get_interval(group.chat_id)
+                        # First quiet spawn is three minutes after the bot joined.
+                        # Subsequent wild spawns have a ten-minute catch window,
+                        # followed by a randomized three-to-nine-minute interval.
+                        anchor = group.last_spawn_at or group.bot_joined_at or group.created_at
+                        required_wait = (
+                            interval_mins if group.last_spawn_at is None else 10 + interval_mins
+                        )
+                        if anchor and now < anchor + timedelta(minutes=required_wait):
+                            continue
+                        species = await get_random_species(session)
+
                     else:
                         species = await get_random_species(session)
                     if not species:

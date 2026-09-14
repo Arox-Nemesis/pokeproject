@@ -1,7 +1,10 @@
 """Pokedex-related handlers for tracking Pokemon collection progress."""
 
+import csv
 import math
 import re
+from functools import lru_cache
+from pathlib import Path
 from datetime import datetime
 
 from aiogram import F, Router
@@ -49,6 +52,35 @@ GEN_NAMES = {
     8: "Galar",
     9: "Paldea",
 }
+
+
+@lru_cache(maxsize=1)
+def _csv_form_names_by_species() -> dict[int, tuple[str, ...]]:
+    """Read every named alternate form from bundled PokeAPI CSV snapshots.
+
+    Forms are displayed even when an old deployment seeded only base species,
+    so Pokédex information does not depend on a complete form import.
+    """
+    root = Path(__file__).resolve().parents[4] / "data" / "csv"
+    pokemon_species: dict[str, int] = {}
+    with (root / "pokemon.csv").open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            pokemon_species[row["id"]] = int(row["species_id"])
+
+    forms: dict[int, list[str]] = {}
+    with (root / "pokemon_forms.csv").open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            identifier = (row.get("form_identifier") or "").strip()
+            species_id = pokemon_species.get(row["pokemon_id"])
+            if not identifier or species_id is None:
+                continue
+            forms.setdefault(species_id, []).append(identifier.replace("-", " ").title())
+    return {species_id: tuple(dict.fromkeys(names)) for species_id, names in forms.items()}
+
+
+def _known_alternate_forms(species_id: int) -> tuple[str, ...]:
+    """Return distinct non-Mega form labels for a base National Dex number."""
+    return _csv_form_names_by_species().get(species_id, ())
 
 
 def parse_pokedex_args(text: str) -> dict:
@@ -907,7 +939,9 @@ async def _entry_page_overview(
         f"<b>Your {species.name}:</b>\n{owned_text}"
     )
 
-    has_forms = bool(get_mega_forms(species.national_dex))
+    has_forms = bool(
+        get_mega_forms(species.national_dex) or _known_alternate_forms(species.national_dex)
+    )
     keyboard = _entry_nav_keyboard(species.national_dex, "overview", has_forms)
     return text, keyboard
 
@@ -957,7 +991,9 @@ async def _entry_page_details(
         f"<b>First Caught:</b> {first_caught_text}"
     )
 
-    has_forms = bool(get_mega_forms(species.national_dex))
+    has_forms = bool(
+        get_mega_forms(species.national_dex) or _known_alternate_forms(species.national_dex)
+    )
     keyboard = _entry_nav_keyboard(species.national_dex, "details", has_forms)
     return text, keyboard
 
@@ -967,8 +1003,14 @@ def _entry_page_forms(
 ) -> tuple[str, InlineKeyboardBuilder]:
     """Page 3: Forms — Mega evolutions (and future regional forms)."""
     mega_forms = get_mega_forms(species.national_dex)
+    alternate_forms = _known_alternate_forms(species.national_dex)
 
     lines = [f"📕 <b>#{species.national_dex:03d} — {species.name} (Forms)</b>\n"]
+
+    if alternate_forms:
+        lines.append("<b>Alternate Forms</b>")
+        lines.extend(f"• {form_name}" for form_name in alternate_forms)
+        lines.append("")
 
     if mega_forms:
         for mf in mega_forms:
@@ -993,7 +1035,7 @@ def _entry_page_forms(
                 f"  SpA: {mf.base_sp_attack} | SpD: {mf.base_sp_defense} | SPE: {mf.base_speed}\n"
                 f"{stone_text}"
             )
-    else:
+    elif not alternate_forms:
         lines.append("<i>No alternate forms available.</i>")
 
     keyboard = _entry_nav_keyboard(species.national_dex, "forms", has_forms=True)
