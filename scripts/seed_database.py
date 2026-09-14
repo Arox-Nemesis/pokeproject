@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from telemon.database import get_session_context, init_db
-from telemon.database.models import Item, Move, PokemonSpecies
+from telemon.database.models import Item, Move, PokemonSpecies, PokemonLearnset
 from telemon.logging import setup_logging, get_logger
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -29,13 +29,13 @@ async def seed_pokemon(session) -> int:
     with open(pokemon_file) as f:
         pokemon_data = json.load(f)
 
+    # BULK LOOKUP: Get all existing IDs at once
+    existing = (await session.execute(select(PokemonSpecies.national_dex))).scalars().all()
+    existing_set = set(existing)
+
     count = 0
     for poke in pokemon_data:
-        # Check if already exists
-        result = await session.execute(
-            select(PokemonSpecies).where(PokemonSpecies.national_dex == poke["national_dex"])
-        )
-        if result.scalar_one_or_none():
+        if poke["national_dex"] in existing_set:
             continue
 
         species = PokemonSpecies(
@@ -90,13 +90,13 @@ async def seed_moves(session) -> int:
     with open(moves_file) as f:
         moves_data = json.load(f)
 
+    # BULK LOOKUP
+    existing = (await session.execute(select(Move.id))).scalars().all()
+    existing_set = set(existing)
+
     count = 0
     for move_data in moves_data:
-        # Check if already exists
-        result = await session.execute(
-            select(Move).where(Move.id == move_data["id"])
-        )
-        if result.scalar_one_or_none():
+        if move_data["id"] in existing_set:
             continue
 
         move = Move(
@@ -122,6 +122,40 @@ async def seed_moves(session) -> int:
     return count
 
 
+async def seed_learnsets(session) -> int:
+    """Seed Pokemon level-up learnsets."""
+    learnsets_file = DATA_DIR / "learnsets.json"
+    if not learnsets_file.exists():
+        logger.warning("learnsets.json not found, skipping")
+        return 0
+
+    with open(learnsets_file) as f:
+        learnsets_data = json.load(f)
+
+    # BULK LOOKUP
+    existing = (await session.execute(select(PokemonLearnset.species_id).distinct())).scalars().all()
+    existing_set = set(existing)
+
+    count = 0
+    for entry in learnsets_data:
+        species_id = entry["species_id"]
+        if species_id in existing_set:
+            continue
+
+        for move_data in entry.get("level_up_moves", []):
+            learnset = PokemonLearnset(
+                species_id=species_id,
+                move_id=move_data["move_id"],
+                learn_method="level-up",          
+                level_learned=move_data["level"]  
+            )
+            session.add(learnset)
+            count += 1
+
+    await session.commit()
+    return count
+
+
 async def seed_items(session) -> int:
     """Seed items data."""
     items_file = DATA_DIR / "items.json"
@@ -132,13 +166,13 @@ async def seed_items(session) -> int:
     with open(items_file) as f:
         items_data = json.load(f)
 
+    # BULK LOOKUP
+    existing = (await session.execute(select(Item.id))).scalars().all()
+    existing_set = set(existing)
+
     count = 0
     for item_data in items_data:
-        # Check if already exists
-        result = await session.execute(
-            select(Item).where(Item.id == item_data["id"])
-        )
-        if result.scalar_one_or_none():
+        if item_data["id"] in existing_set:
             continue
 
         item = Item(
@@ -175,6 +209,10 @@ async def main():
         moves_count = await seed_moves(session)
         logger.info(f"Seeded {moves_count} moves")
 
+        # Seed Learnsets
+        learnsets_count = await seed_learnsets(session)
+        logger.info(f"Seeded {learnsets_count} learnset entries")
+
         # Seed Items
         items_count = await seed_items(session)
         logger.info(f"Seeded {items_count} items")
@@ -184,3 +222,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
