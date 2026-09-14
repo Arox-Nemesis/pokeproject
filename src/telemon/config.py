@@ -128,7 +128,8 @@ class Settings(BaseSettings):
             or query.get("ssl", "").lower() in {"1", "true", "yes", "require"}
             or query.get("tls", "").lower() in {"1", "true", "yes", "require"}
         )
-                if not wants_tls or parts.scheme != "redis":
+        
+        if not wants_tls or parts.scheme != "redis":
             return redis_url
 
         normalized_query = [
