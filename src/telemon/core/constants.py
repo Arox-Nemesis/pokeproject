@@ -47,33 +47,78 @@ BREED_COOLDOWN_SECONDS: int = 1800
 # Natures (25 canonical Pokemon natures, sorted)
 # ------------------------------------------------------------------ #
 NATURES: list[str] = [
-    "adamant", "bashful", "bold", "brave", "calm",
-    "careful", "docile", "gentle", "hardy", "hasty",
-    "impish", "jolly", "lax", "lonely", "mild",
-    "modest", "naive", "naughty", "quiet", "quirky",
-    "rash", "relaxed", "sassy", "serious", "timid",
+    "adamant",
+    "bashful",
+    "bold",
+    "brave",
+    "calm",
+    "careful",
+    "docile",
+    "gentle",
+    "hardy",
+    "hasty",
+    "impish",
+    "jolly",
+    "lax",
+    "lonely",
+    "mild",
+    "modest",
+    "naive",
+    "naughty",
+    "quiet",
+    "quirky",
+    "rash",
+    "relaxed",
+    "sassy",
+    "serious",
+    "timid",
 ]
 
 # ------------------------------------------------------------------ #
 # Types (18 canonical Pokemon types)
 # ------------------------------------------------------------------ #
 VALID_TYPES: set[str] = {
-    "normal", "fire", "water", "grass", "electric", "ice",
-    "fighting", "poison", "ground", "flying", "psychic", "bug",
-    "rock", "ghost", "dragon", "dark", "steel", "fairy",
+    "normal",
+    "fire",
+    "water",
+    "grass",
+    "electric",
+    "ice",
+    "fighting",
+    "poison",
+    "ground",
+    "flying",
+    "psychic",
+    "bug",
+    "rock",
+    "ghost",
+    "dragon",
+    "dark",
+    "steel",
+    "fairy",
 }
 
 # ------------------------------------------------------------------ #
 # Rarity keywords for spawn filters
 # ------------------------------------------------------------------ #
+# National Dex numbers belonging to the Ultra Beasts.  They are not marked by a
+# dedicated PokeAPI flag, so one canonical set keeps collection and spawn UI consistent.
+ULTRA_BEAST_DEX: frozenset[int] = frozenset({793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806})
+
 RARITY_KEYWORDS: set[str] = {
-    "legendary", "mythical", "rare", "ultra_rare", "uncommon", "common",
+    "legendary",
+    "mythical",
+    "rare",
+    "ultra_rare",
+    "uncommon",
+    "common",
 }
 
 
 # ------------------------------------------------------------------ #
 # Shared helpers
 # ------------------------------------------------------------------ #
+
 
 def determine_gender(species: "PokemonSpecies") -> str | None:
     """Determine gender based on species gender_ratio.

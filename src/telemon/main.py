@@ -4,6 +4,7 @@ import asyncio
 import sys
 
 from telemon.bot import create_bot, create_dispatcher
+from telemon.config import settings
 from telemon.database import close_db, init_db
 from telemon.logging import get_logger, setup_logging
 
@@ -13,18 +14,19 @@ logger = get_logger(__name__)
 async def timed_spawn_loop(bot) -> None:
     """Background task: periodically spawn Pokemon in active groups.
 
-    Each spawn-enabled group gets a random no-activity spawn interval
-    between 10-20 minutes.  The loop checks every 60 seconds and fires
-    a timed spawn if the group's interval has elapsed since its last spawn
-    and there is no active (uncaught) spawn.
+    Quiet groups receive a first spawn after three minutes.  After a successful
+    spawn the bot gives players a ten-minute catch window, then waits a fresh
+    random three-to-nine-minute quiet interval before spawning again.
     """
     import random
     from datetime import datetime, timedelta
+
     from sqlalchemy import select
+
+    from telemon.bot.handlers.admin import get_runtime_config
+    from telemon.core.spawning import create_spawn, get_active_spawn, get_random_species
     from telemon.database import async_session_factory
     from telemon.database.models import Group
-    from telemon.core.spawning import create_spawn, get_random_species, get_active_spawn
-    from telemon.bot.handlers.admin import get_runtime_config
 
     await asyncio.sleep(60)  # Wait 1 minute after startup
 
@@ -33,44 +35,64 @@ async def timed_spawn_loop(bot) -> None:
 
     def _get_interval(chat_id: int) -> float:
         if chat_id not in _group_intervals:
-            lo = get_runtime_config("timed_spawn_min", 10)
-            hi = get_runtime_config("timed_spawn_max", 20)
+            lo = get_runtime_config("timed_spawn_min", 3)
+            hi = get_runtime_config("timed_spawn_max", 9)
             _group_intervals[chat_id] = random.uniform(lo, hi)
         return _group_intervals[chat_id]
 
     def _reroll_interval(chat_id: int) -> None:
-        lo = get_runtime_config("timed_spawn_min", 10)
-        hi = get_runtime_config("timed_spawn_max", 20)
+        lo = get_runtime_config("timed_spawn_min", 3)
+        hi = get_runtime_config("timed_spawn_max", 9)
         _group_intervals[chat_id] = random.uniform(lo, hi)
 
     while True:
         try:
             async with async_session_factory() as session:
-                result = await session.execute(
-                    select(Group).where(Group.spawn_enabled == True)
-                )
+                result = await session.execute(select(Group).where(Group.spawn_enabled == True))
                 groups = result.scalars().all()
 
                 now = datetime.utcnow()
 
                 for group in groups:
-                    interval_mins = _get_interval(group.chat_id)
-                    cutoff = now - timedelta(minutes=interval_mins)
-
-                    # Skip groups that spawned recently
-                    if group.last_spawn_at and group.last_spawn_at > cutoff:
-                        continue
-
-                    # Skip if there's already an active spawn
+                    # Never overlap visible spawns.  This check comes before
+                    # both timed and owner-queued work so a queued batch behaves
+                    # like incense: as soon as the previous Pokémon clears, the
+                    # next one is eligible on the next loop tick.
                     active = await get_active_spawn(session, group.chat_id)
                     if active:
                         continue
 
-                    # Only spawn in groups that have had at least some activity
-                    if group.total_spawns == 0 and group.message_count < 5:
-                        continue
+                    queued = (group.settings or {}).get("forced_spawn_queue")
+                    is_queued_spawn = bool(queued and queued.get("remaining", 0) > 0)
+                    if is_queued_spawn:
+                        from telemon.bot.handlers.admin import _resolve_species
 
-                    species = await get_random_species(session)
+                        filters = queued.get("filters", {})
+                        queued_args = {"name": None, "stats": {}, **filters}
+                        species, queue_error = await _resolve_species(session, queued_args)
+                        if queue_error or species is None:
+                            settings_data = dict(group.settings or {})
+                            settings_data.pop("forced_spawn_queue", None)
+                            group.settings = settings_data
+                            await session.commit()
+                            logger.warning(
+                                "Cancelled invalid forced spawn queue", chat_id=group.chat_id
+                            )
+                            continue
+                        interval_mins = 0.0
+                    else:
+                        interval_mins = _get_interval(group.chat_id)
+                        # First quiet spawn is three minutes after the bot joined.
+                        # Subsequent wild spawns have a ten-minute catch window,
+                        # followed by a randomized three-to-nine-minute interval.
+                        anchor = group.last_spawn_at or group.bot_joined_at or group.created_at
+                        required_wait = (
+                            interval_mins if group.last_spawn_at is None else 10 + interval_mins
+                        )
+                        if anchor and now < anchor + timedelta(minutes=required_wait):
+                            continue
+                        species = await get_random_species(session)
+
                     if not species:
                         continue
 
@@ -82,12 +104,14 @@ async def timed_spawn_loop(bot) -> None:
                     )
 
                     if spawn:
-                        from telemon.bot.handlers.spawn import send_spawn_message
                         from aiogram.exceptions import (
-                            TelegramForbiddenError,
                             TelegramBadRequest,
+                            TelegramForbiddenError,
                             TelegramMigrateToChat,
                         )
+
+                        from telemon.bot.handlers.spawn import send_spawn_message
+
                         try:
                             msg_id = await send_spawn_message(bot, group.chat_id, spawn)
                         except TelegramMigrateToChat as e:
@@ -131,6 +155,15 @@ async def timed_spawn_loop(bot) -> None:
                             # Only update spawn stats after confirmed delivery
                             group.total_spawns += 1
                             group.last_spawn_at = datetime.utcnow()
+                            queued = (group.settings or {}).get("forced_spawn_queue")
+                            if queued and queued.get("remaining", 0) > 0:
+                                settings_data = dict(group.settings or {})
+                                queued["remaining"] -= 1
+                                if queued["remaining"] > 0:
+                                    settings_data["forced_spawn_queue"] = queued
+                                else:
+                                    settings_data.pop("forced_spawn_queue", None)
+                                group.settings = settings_data
 
                             await session.commit()
                             logger.info(
@@ -159,9 +192,10 @@ async def incense_spawn_loop(bot) -> None:
     from datetime import datetime
 
     from sqlalchemy import select
+
+    from telemon.core.spawning import create_spawn, get_active_spawn, get_random_species
     from telemon.database import async_session_factory
-    from telemon.database.models import User, Group
-    from telemon.core.spawning import create_spawn, get_random_species, get_active_spawn
+    from telemon.database.models import Group, User
 
     await asyncio.sleep(15)  # Wait after startup
 
@@ -195,11 +229,13 @@ async def incense_spawn_loop(bot) -> None:
                     )
 
                     if spawn:
-                        from telemon.bot.handlers.spawn import send_spawn_message
                         from aiogram.exceptions import (
-                            TelegramForbiddenError,
                             TelegramBadRequest,
+                            TelegramForbiddenError,
                         )
+
+                        from telemon.bot.handlers.spawn import send_spawn_message
+
                         try:
                             msg_id = await send_spawn_message(bot, uid, spawn)
                         except (TelegramForbiddenError, TelegramBadRequest):
@@ -260,12 +296,14 @@ async def incense_spawn_loop(bot) -> None:
                     )
 
                     if spawn:
-                        from telemon.bot.handlers.spawn import send_spawn_message
                         from aiogram.exceptions import (
-                            TelegramForbiddenError,
                             TelegramBadRequest,
+                            TelegramForbiddenError,
                             TelegramMigrateToChat,
                         )
+
+                        from telemon.bot.handlers.spawn import send_spawn_message
+
                         try:
                             msg_id = await send_spawn_message(bot, cid, spawn)
                         except TelegramMigrateToChat as e:
@@ -318,13 +356,15 @@ async def incense_spawn_loop(bot) -> None:
         except Exception as e:
             logger.error("Error in incense spawn loop", error=str(e))
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(settings.incense_spawn_interval_seconds)
 
 
 async def trade_expiry_loop(bot) -> None:
     """Background task: auto-cancel trades after 5 minutes of inactivity."""
     from datetime import datetime, timedelta
+
     from sqlalchemy import select
+
     from telemon.database import async_session_factory
     from telemon.database.models import Pokemon
     from telemon.database.models.trade import Trade, TradeStatus
@@ -342,11 +382,13 @@ async def trade_expiry_loop(bot) -> None:
                 try:
                     result = await session.execute(
                         select(Trade).where(
-                            Trade.status.in_([
-                                TradeStatus.WAITING_ACCEPT,
-                                TradeStatus.PENDING,
-                                TradeStatus.CONFIRMED_ONE,
-                            ]),
+                            Trade.status.in_(
+                                [
+                                    TradeStatus.WAITING_ACCEPT,
+                                    TradeStatus.PENDING,
+                                    TradeStatus.CONFIRMED_ONE,
+                                ]
+                            ),
                             Trade.last_activity_at < cutoff,
                         )
                     )
@@ -356,11 +398,13 @@ async def trade_expiry_loop(bot) -> None:
                     await session.rollback()
                     result = await session.execute(
                         select(Trade).where(
-                            Trade.status.in_([
-                                TradeStatus.WAITING_ACCEPT,
-                                TradeStatus.PENDING,
-                                TradeStatus.CONFIRMED_ONE,
-                            ]),
+                            Trade.status.in_(
+                                [
+                                    TradeStatus.WAITING_ACCEPT,
+                                    TradeStatus.PENDING,
+                                    TradeStatus.CONFIRMED_ONE,
+                                ]
+                            ),
                             Trade.created_at < cutoff,
                         )
                     )
@@ -368,7 +412,9 @@ async def trade_expiry_loop(bot) -> None:
 
                 for trade in expired_trades:
                     # Unmark all Pokemon in the trade
-                    for poke_id in (trade.user1_pokemon_ids or []) + (trade.user2_pokemon_ids or []):
+                    for poke_id in (trade.user1_pokemon_ids or []) + (
+                        trade.user2_pokemon_ids or []
+                    ):
                         poke_result = await session.execute(
                             select(Pokemon).where(Pokemon.id == poke_id)
                         )
@@ -437,8 +483,8 @@ async def main() -> None:
 
     # Load persistent runtime config from DB
     try:
-        from telemon.database import async_session_factory
         from telemon.bot.handlers.admin import load_runtime_config
+        from telemon.database import async_session_factory
 
         async with async_session_factory() as session:
             await load_runtime_config(session)
