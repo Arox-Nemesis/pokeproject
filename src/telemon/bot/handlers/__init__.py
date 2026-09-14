@@ -8,6 +8,7 @@ from telemon.bot.handlers import (
     battle,
     breeding,
     catch,
+    control,
     help_cmd,
     leaderboard,
     market,
@@ -67,6 +68,9 @@ def register_all_handlers(dp: Dispatcher) -> None:
 
     # Teams / Guilds
     dp.include_router(team.router)
+
+    # Owner control and admin handlers
+    dp.include_router(control.router)
 
     # Admin handlers
     dp.include_router(admin.router)

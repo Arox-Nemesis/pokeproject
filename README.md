@@ -166,3 +166,24 @@ This project is for educational purposes. Pokemon is a trademark of Nintendo/Gam
 ## Contributing
 
 Contributions are welcome! Please read the development plan in `DEVELOPMENT_PLAN.md`.
+
+## Owner controls and per-group settings
+
+Set these environment variables before deploying:
+
+```env
+OWNER_ID=123456789                 # your numeric Telegram user ID (required for /control and owner tools)
+OWNER_GROUP_ID=-1001234567890      # optional: only this group can host /control and owner category spawns
+INCENSE_SPAWN_COUNT=50
+INCENSE_SPAWN_INTERVAL_SECONDS=10  # seconds between incense spawn attempts
+```
+
+`/control` is an owner-only inline control panel. **Default** changes the persistent baseline for all groups. Select **Add**, then send a numeric Telegram group ID (or use `/control add -100...`) to create a group entry; it inherits Default values until you change one of its settings. Group overrides affect only that group and persist in PostgreSQL. The panel manages spawn thresholds/timers/cooldowns, catch and daily rewards, market fee, and incense settings.
+
+Owner category spawns remain group-only. Use standard filters such as `/spawn legendary gen:4`; configured spawn admins require their matching permissions, while `OWNER_ID` has all permissions. Set `OWNER_GROUP_ID` to limit owner-driven management and category spawning to one group.
+
+## Collection and form commands
+
+`/pokemon <name>` lists every matching caught Pokémon while preserving its original catch serial number. Collection filters include `rare`, `legendary`, `mythical`, `ultra_beast`, `unique`, `shiny`, `type:<type>`, and `gen:<number>`. Use `sort:level`, `sort:iv`, `sort:dex`, `sort:name`, or `sort:rarity`.
+
+Regional forms, the existing evolution-item catalogue, and Mega Evolutions are already supported. Use `/shop` to obtain evolution items and Mega Stones, `/evolve` for normal item/level evolutions, and `/mega` / `/demega` for supported Mega forms. Gigantamax is not enabled because the current species data and battle system do not provide a complete, balanced Gigantamax form set; this avoids offering transformations that cannot function correctly in battles.
