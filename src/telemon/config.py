@@ -153,11 +153,11 @@ class Settings(BaseSettings):
     spawn_guild_cooldown_seconds: float = Field(default=1.0, ge=0)  # Per-guild cooldown
 
     # Economy Configuration
-    daily_reward_base: int = Field(default=100, ge=1)
-    daily_streak_bonus: int = Field(default=10, ge=0)
+    daily_reward_base: int = Field(default=1000, ge=1)
+    daily_streak_bonus: int = Field(default=100, ge=0)
     daily_streak_max: int = Field(default=30, ge=1)
-    catch_reward_min: int = Field(default=10, ge=0)
-    catch_reward_max: int = Field(default=100, ge=1)
+    catch_reward_min: int = Field(default=500, ge=0)
+    catch_reward_max: int = Field(default=1000, ge=1)
     market_fee_percent: int = Field(default=5, ge=0, le=50)
 
     # Battle Configuration
@@ -173,7 +173,7 @@ class Settings(BaseSettings):
     )
 
     # Shiny Configuration
-    shiny_base_rate: int = Field(default=4096, ge=1)
+    shiny_base_rate: int = Field(default=2049, ge=1)
 
     # Logging Configuration
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO")
