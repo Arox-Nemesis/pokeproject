@@ -173,14 +173,14 @@ Set these environment variables before deploying:
 
 ```env
 OWNER_ID=123456789                 # your numeric Telegram user ID (required for /control and owner tools)
-OWNER_GROUP_ID=-1001234567890      # optional: only this group can host /control
+OWNER_GROUP_ID=-1001234567890      # optional: only this group can host /control and owner category spawns
 INCENSE_SPAWN_COUNT=50
 INCENSE_SPAWN_INTERVAL_SECONDS=10  # seconds between incense spawn attempts
 ```
 
 `/control` is an owner-only inline control panel. **Default** changes the persistent baseline for all groups. Select **Add**, then send a numeric Telegram group ID (or use `/control add -100...`) to create a group entry; it inherits Default values until you change one of its settings. Group overrides affect only that group and persist in PostgreSQL. The panel manages spawn thresholds/timers/cooldowns, catch and daily rewards, market fee, and incense settings.
 
-Owner category spawns remain group-only. Use standard filters such as `/spawn legendary gen:4`; configured spawn admins require their matching permissions, while `OWNER_ID` has all permissions. Set `OWNER_GROUP_ID` only to limit the `/control` panel to one group; owner `/spawn` commands remain available in every group.
+Owner category spawns remain group-only. Use standard filters such as `/spawn legendary gen:4`; configured spawn admins require their matching permissions, while `OWNER_ID` has all permissions. Set `OWNER_GROUP_ID` to limit owner-driven management and category spawning to one group.
 
 ## Collection and form commands
 
@@ -197,9 +197,3 @@ Groups no longer need activity to begin spawning. A group’s first wild Pokémo
 Pokédex lookups accept the conventional number notation: `/pokedex #25` and `/pokedex 25` both open Pikachu’s entry.
 
 Cosmoem has a dedicated Lunala route: at level 53 or above, use a **Lunala Stone** (`/evolve <serial> lunala stone`). It is sold in `/shop` for 20,000 coins and is consumed by the evolution.
-
-### Deployment conflict resolution
-
-When GitHub reports a conflict, resolve it by retaining the newest version of the affected file from this branch—especially `src/telemon/bot/handlers/admin.py`, `src/telemon/main.py`, and `README.md`—then redeploy that merge commit. An older conflict side can restore the removed owner-group `/spawn` restriction. The current code authorizes `/spawn` by `OWNER_ID`; `OWNER_GROUP_ID` applies only to the owner control panel.
-
-The Pokédex Forms page now reads bundled PokeAPI form metadata, so it lists alternate forms such as **Lycanroc Midday, Midnight, and Dusk**, even for deployments whose database was seeded before alternate-form rows were available.

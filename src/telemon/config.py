@@ -128,13 +128,19 @@ class Settings(BaseSettings):
             or query.get("ssl", "").lower() in {"1", "true", "yes", "require"}
             or query.get("tls", "").lower() in {"1", "true", "yes", "require"}
         )
+        
         if not wants_tls or parts.scheme != "redis":
             return redis_url
 
         normalized_query = [
-            (key, item_value) for key, item_value in query_items if key not in {"ssl", "tls"}
+            (key, item_value)
+            for key, item_value in query_items
+            if key not in {"ssl", "tls"}
         ]
-        return urlunsplit(parts._replace(scheme="rediss", query=urlencode(normalized_query)))
+        
+        return urlunsplit(
+            parts._replace(scheme="rediss", query=urlencode(normalized_query))
+        )
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)

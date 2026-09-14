@@ -523,8 +523,18 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
     # Parse arguments
     args = _parse_spawn_args(message.text or "")
 
-    if args["count"] > 1 and not _is_owner(user_id):
-        await message.answer("Only the configured owner can queue multiple forced spawns.")
+    # When an owner group is configured, category and generation force-spawns
+    # are deliberately confined there.  This prevents a powerful owner tool
+    # from accidentally affecting an unrelated public group.
+    if (
+        _is_owner(user_id)
+        and settings.owner_group_id is not None
+        and message.chat.id != settings.owner_group_id
+        and (args["rarity"] is not None or args["gen"] is not None)
+    ):
+        await message.answer(
+            "Category and generation spawns are limited to the configured owner group."
+        )
         return
 
     # Check granular permissions
