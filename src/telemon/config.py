@@ -17,7 +17,6 @@ CURRENCY_SHORT: str = "PC"
 # ------------------------------------------------------------------ #
 # Access control
 # ------------------------------------------------------------------ #
-BOT_OWNER_ID: int = 6894738352
 
 
 class Settings(BaseSettings):
@@ -46,6 +45,16 @@ class Settings(BaseSettings):
             "Optional Telegram API hash for MTProto/client integrations; "
             "not required for the aiogram Bot API runtime."
         ),
+    )
+
+    # Owner controls
+    owner_id: int | None = Field(
+        default=None,
+        description="Telegram user ID allowed to use owner-only controls.",
+    )
+    owner_group_id: int | None = Field(
+        default=None,
+        description="Optional group ID in which owner-only forced category spawns are allowed.",
     )
 
     # Access Control
@@ -123,13 +132,9 @@ class Settings(BaseSettings):
             return redis_url
 
         normalized_query = [
-            (key, item_value)
-            for key, item_value in query_items
-            if key not in {"ssl", "tls"}
+            (key, item_value) for key, item_value in query_items if key not in {"ssl", "tls"}
         ]
-        return urlunsplit(
-            parts._replace(scheme="rediss", query=urlencode(normalized_query))
-        )
+        return urlunsplit(parts._replace(scheme="rediss", query=urlencode(normalized_query)))
 
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)
@@ -154,14 +159,18 @@ class Settings(BaseSettings):
 
     # Incense Configuration
     incense_spawn_count: int = Field(default=50, ge=1, le=500)
+    incense_spawn_interval_seconds: int = Field(
+        default=10,
+        ge=3,
+        le=3600,
+        description="Seconds between incense spawn attempts.",
+    )
 
     # Shiny Configuration
     shiny_base_rate: int = Field(default=4096, ge=1)
 
     # Logging Configuration
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        default="INFO"
-    )
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO")
     log_format: Literal["console", "json"] = Field(default="console")
 
     # Development

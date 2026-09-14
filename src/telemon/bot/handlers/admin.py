@@ -9,13 +9,21 @@ from aiogram.types import Message
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from telemon.config import BOT_OWNER_ID
-from telemon.core.constants import VALID_TYPES, RARITY_KEYWORDS, MAX_GENERATION
+from telemon.config import settings
+from telemon.core.constants import MAX_GENERATION, RARITY_KEYWORDS, VALID_TYPES
 from telemon.core.spawning import create_spawn, get_random_species
-from telemon.database.models import ActiveSpawn, BotConfig, Group, Pokemon, PokemonSpecies, SpawnAdmin, User
+from telemon.core.text import esc
+from telemon.database.models import (
+    ActiveSpawn,
+    BotConfig,
+    Group,
+    Pokemon,
+    PokemonSpecies,
+    SpawnAdmin,
+    User,
+)
 from telemon.database.models.spawn_admin import SPAWN_PERMISSIONS
 from telemon.logging import get_logger
-from telemon.core.text import esc
 
 router = Router(name="admin")
 logger = get_logger(__name__)
@@ -25,7 +33,7 @@ logger = get_logger(__name__)
 # Persistent runtime configuration
 # ------------------------------------------------------------------ #
 
-_runtime_overrides: dict[str, int] = {}
+_runtime_overrides: dict[str, int | float] = {}
 
 # Allowed config keys: (min, max, description)
 _CONFIG_KEYS: dict[str, tuple[int, int, str]] = {
@@ -44,9 +52,16 @@ _CONFIG_DEFAULTS: dict[str, int] = {
 }
 
 
-def get_runtime_config(key: str, default: int) -> int:
+def get_runtime_config(key: str, default: int | float) -> int | float:
     """Get a runtime-configurable value, falling back to default."""
     return _runtime_overrides.get(key, default)
+
+
+def get_group_runtime_config(group: Group | None, key: str, default: int | float) -> int | float:
+    """Resolve a per-group override, then a persisted default, then env default."""
+    if group and group.settings and key in group.settings:
+        return group.settings[key]
+    return get_runtime_config(f"default.{key}", default)
 
 
 async def load_runtime_config(session: AsyncSession) -> None:
@@ -58,11 +73,15 @@ async def load_runtime_config(session: AsyncSession) -> None:
     rows = result.scalars().all()
     for row in rows:
         try:
-            _runtime_overrides[row.key] = int(row.value)
+            _runtime_overrides[row.key] = float(row.value) if "." in row.value else int(row.value)
         except ValueError:
             logger.warning("Ignoring non-integer config", key=row.key, value=row.value)
     if rows:
-        logger.info("Loaded persistent runtime config", count=len(rows), keys=list(_runtime_overrides.keys()))
+        logger.info(
+            "Loaded persistent runtime config",
+            count=len(rows),
+            keys=list(_runtime_overrides.keys()),
+        )
 
 
 async def _persist_config(session: AsyncSession, key: str, value: int) -> None:
@@ -82,16 +101,15 @@ async def _persist_config(session: AsyncSession, key: str, value: int) -> None:
 # Permission helpers
 # ------------------------------------------------------------------ #
 
+
 async def get_spawn_admin(session: AsyncSession, user_id: int) -> SpawnAdmin | None:
     """Get SpawnAdmin record for a user (None if not a spawner)."""
-    result = await session.execute(
-        select(SpawnAdmin).where(SpawnAdmin.user_id == user_id)
-    )
+    result = await session.execute(select(SpawnAdmin).where(SpawnAdmin.user_id == user_id))
     return result.scalar_one_or_none()
 
 
 def _is_owner(user_id: int) -> bool:
-    return user_id == BOT_OWNER_ID
+    return settings.owner_id is not None and user_id == settings.owner_id
 
 
 async def is_spawn_admin(session: AsyncSession, user_id: int) -> bool:
@@ -194,10 +212,10 @@ def _parse_spawn_args(text: str) -> dict:
             result["perms_needed"].add("shiny")
             continue
 
-        # gen:N filter
-        if lower.startswith("gen:"):
+        # gen:N and genN filters
+        if lower.startswith("gen:") or (lower.startswith("gen") and lower[3:].isdigit()):
             try:
-                gen = int(lower.split(":", 1)[1])
+                gen = int(lower.split(":", 1)[1]) if ":" in lower else int(lower[3:])
                 if 1 <= gen <= MAX_GENERATION:
                     result["gen"] = gen
                     result["perms_needed"].add("gen")
@@ -306,7 +324,7 @@ def _resolve_forced_stats(raw_stats: dict) -> tuple[dict | None, str | None]:
 
     # Gather individual IV overrides
     fixed: dict[str, int] = {}  # key -> value for specified IVs
-    unfixed: list[str] = []     # keys for unspecified IVs
+    unfixed: list[str] = []  # keys for unspecified IVs
     for key in _IV_KEYS:
         val = raw_stats.get(key)
         if val is not None:
@@ -388,6 +406,7 @@ def _resolve_forced_stats(raw_stats: dict) -> tuple[dict | None, str | None]:
 # Species resolver
 # ------------------------------------------------------------------ #
 
+
 async def _resolve_species(
     session: AsyncSession, args: dict
 ) -> tuple[PokemonSpecies | None, str | None]:
@@ -400,9 +419,7 @@ async def _resolve_species(
     # By name — exact match
     if args["name"]:
         name_lower = args["name"].lower().replace(" ", "-")
-        result = await session.execute(
-            query.where(PokemonSpecies.name_lower == name_lower)
-        )
+        result = await session.execute(query.where(PokemonSpecies.name_lower == name_lower))
         species = result.scalar_one_or_none()
         if not species:
             # Try partial match
@@ -419,9 +436,7 @@ async def _resolve_species(
                 # Try dex number
                 try:
                     dex = int(args["name"])
-                    result = await session.execute(
-                        query.where(PokemonSpecies.national_dex == dex)
-                    )
+                    result = await session.execute(query.where(PokemonSpecies.national_dex == dex))
                     species = result.scalar_one_or_none()
                 except ValueError:
                     pass
@@ -444,9 +459,7 @@ async def _resolve_species(
 
     if args["type"]:
         ptype = args["type"]
-        filters.append(
-            (PokemonSpecies.type1 == ptype) | (PokemonSpecies.type2 == ptype)
-        )
+        filters.append((PokemonSpecies.type1 == ptype) | (PokemonSpecies.type2 == ptype))
 
     if args["rarity"]:
         # Reuse the spawn engine's tier definition so /spawn and wild spawns
@@ -471,6 +484,7 @@ async def _resolve_species(
 # ------------------------------------------------------------------ #
 # /spawn command
 # ------------------------------------------------------------------ #
+
 
 @router.message(Command("spawn"))
 async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
@@ -502,6 +516,20 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
 
     # Parse arguments
     args = _parse_spawn_args(message.text or "")
+
+    # When an owner group is configured, category and generation force-spawns
+    # are deliberately confined there.  This prevents a powerful owner tool
+    # from accidentally affecting an unrelated public group.
+    if (
+        _is_owner(user_id)
+        and settings.owner_group_id is not None
+        and message.chat.id != settings.owner_group_id
+        and (args["rarity"] is not None or args["gen"] is not None)
+    ):
+        await message.answer(
+            "Category and generation spawns are limited to the configured owner group."
+        )
+        return
 
     # Check granular permissions
     admin = await get_spawn_admin(session, user_id)
@@ -543,8 +571,7 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
 
     if existing:
         await message.answer(
-            "There's already an active spawn in this group!\n"
-            "Use /catch [name] to catch it first."
+            "There's already an active spawn in this group!\nUse /catch [name] to catch it first."
         )
         return
 
@@ -618,12 +645,13 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
 # /addspawner  /removespawner
 # ------------------------------------------------------------------ #
 
+
 @router.message(Command("addspawner"))
 async def cmd_add_spawner(message: Message, session: AsyncSession) -> None:
     """Add a user to spawn admins list. Bot owner only."""
     if not message.from_user:
         return
-    if message.from_user.id != BOT_OWNER_ID:
+    if not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
@@ -664,7 +692,7 @@ async def cmd_remove_spawner(message: Message, session: AsyncSession) -> None:
     """Remove a user from spawn admins list. Bot owner only."""
     if not message.from_user:
         return
-    if message.from_user.id != BOT_OWNER_ID:
+    if not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
@@ -682,9 +710,7 @@ async def cmd_remove_spawner(message: Message, session: AsyncSession) -> None:
         await message.answer(f"User {esc(target_username)} is not a spawn admin!")
         return
 
-    await session.execute(
-        delete(SpawnAdmin).where(SpawnAdmin.user_id == target_user_id)
-    )
+    await session.execute(delete(SpawnAdmin).where(SpawnAdmin.user_id == target_user_id))
     await session.commit()
 
     await message.answer(f"Removed {esc(target_username)} from spawn admins!")
@@ -695,6 +721,7 @@ async def cmd_remove_spawner(message: Message, session: AsyncSession) -> None:
 # /grant  /revoke  — manage spawner permissions
 # ------------------------------------------------------------------ #
 
+
 @router.message(Command("grant"))
 async def cmd_grant(message: Message, session: AsyncSession) -> None:
     """Grant spawn permissions to a spawner. Bot owner only.
@@ -703,7 +730,7 @@ async def cmd_grant(message: Message, session: AsyncSession) -> None:
         /grant <user_id> <perm1> [perm2] ...
         /grant (reply) <perm1> [perm2] ...
     """
-    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+    if not message.from_user or not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
@@ -780,7 +807,7 @@ async def cmd_revoke(message: Message, session: AsyncSession) -> None:
         /revoke <user_id> <perm1> [perm2] ...
         /revoke (reply) <perm1> [perm2] ...
     """
-    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+    if not message.from_user or not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
@@ -832,9 +859,7 @@ async def cmd_revoke(message: Message, session: AsyncSession) -> None:
             f"Current perms: <b>{admin.perm_display()}</b>"
         )
     else:
-        await message.answer(
-            f"User <code>{target_user_id}</code> didn't have those permissions."
-        )
+        await message.answer(f"User <code>{target_user_id}</code> didn't have those permissions.")
     logger.info("Revoked spawn perms", user_id=target_user_id, revoked=sorted(removed))
 
 
@@ -842,12 +867,13 @@ async def cmd_revoke(message: Message, session: AsyncSession) -> None:
 # /spawners  — list all spawn admins with permissions
 # ------------------------------------------------------------------ #
 
+
 @router.message(Command("spawners"))
 async def cmd_list_spawners(message: Message, session: AsyncSession) -> None:
     """List all spawn admins with their permissions. Bot owner only."""
     if not message.from_user:
         return
-    if message.from_user.id != BOT_OWNER_ID:
+    if not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
@@ -866,9 +892,7 @@ async def cmd_list_spawners(message: Message, session: AsyncSession) -> None:
     for i, admin in enumerate(spawn_admins, 1):
         added_at = admin.created_at.strftime("%Y-%m-%d") if admin.created_at else "?"
         perms = admin.perm_display()
-        lines.append(
-            f"{i}. <code>{admin.user_id}</code> -- <b>{perms}</b> (added: {added_at})"
-        )
+        lines.append(f"{i}. <code>{admin.user_id}</code> -- <b>{perms}</b> (added: {added_at})")
 
     lines.append(f"\nTotal: {len(spawn_admins)} spawn admin(s)")
     lines.append("Note: Bot owner always has full access.")
@@ -886,6 +910,7 @@ async def cmd_list_spawners(message: Message, session: AsyncSession) -> None:
 # /setconfig  — bot owner runtime config
 # ------------------------------------------------------------------ #
 
+
 @router.message(Command("setconfig"))
 async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
     """Set runtime configuration values. Bot owner only.
@@ -896,7 +921,7 @@ async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
         /setconfig flee_enabled 0       — disable flee timer
         /setconfig spawn_timeout 600    — set flee timer to 10 minutes
     """
-    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+    if not message.from_user or not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
@@ -905,6 +930,7 @@ async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
 
     if not parts:
         from telemon.config import settings
+
         lines = ["<b>Runtime Config</b>\n"]
         for key, (lo, hi, desc) in _CONFIG_KEYS.items():
             current = _runtime_overrides.get(key)
@@ -933,8 +959,7 @@ async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
     key = parts[0].lower()
     if key not in _CONFIG_KEYS:
         await message.answer(
-            f"Unknown config key: <b>{key}</b>\n"
-            f"Available: {', '.join(_CONFIG_KEYS.keys())}"
+            f"Unknown config key: <b>{key}</b>\nAvailable: {', '.join(_CONFIG_KEYS.keys())}"
         )
         return
 
@@ -953,18 +978,21 @@ async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
     if key == "timed_spawn_min":
         current_max = get_runtime_config("timed_spawn_max", _CONFIG_DEFAULTS["timed_spawn_max"])
         if value > current_max:
-            await message.answer(f"timed_spawn_min ({value}) can't exceed timed_spawn_max ({current_max})!")
+            await message.answer(
+                f"timed_spawn_min ({value}) can't exceed timed_spawn_max ({current_max})!"
+            )
             return
     elif key == "timed_spawn_max":
         current_min = get_runtime_config("timed_spawn_min", _CONFIG_DEFAULTS["timed_spawn_min"])
         if value < current_min:
-            await message.answer(f"timed_spawn_max ({value}) can't be less than timed_spawn_min ({current_min})!")
+            await message.answer(
+                f"timed_spawn_max ({value}) can't be less than timed_spawn_min ({current_min})!"
+            )
             return
 
     await _persist_config(session, key, value)
     await message.answer(
-        f"✅ Set <b>{key}</b> = <b>{value}</b>\n"
-        f"Saved to database — persists across restarts."
+        f"✅ Set <b>{key}</b> = <b>{value}</b>\nSaved to database — persists across restarts."
     )
     logger.info("Runtime config changed", key=key, value=value, by=message.from_user.id)
 
@@ -972,6 +1000,7 @@ async def cmd_setconfig(message: Message, session: AsyncSession) -> None:
 # ------------------------------------------------------------------ #
 # /settings  — group admin command
 # ------------------------------------------------------------------ #
+
 
 @router.message(Command("settings"))
 async def cmd_settings(message: Message, session: AsyncSession) -> None:
@@ -985,9 +1014,7 @@ async def cmd_settings(message: Message, session: AsyncSession) -> None:
         await message.answer("Only group admins can use this command!")
         return
 
-    result = await session.execute(
-        select(Group).where(Group.chat_id == message.chat.id)
-    )
+    result = await session.execute(select(Group).where(Group.chat_id == message.chat.id))
     group = result.scalar_one_or_none()
 
     if not group:
@@ -1003,12 +1030,12 @@ async def cmd_settings(message: Message, session: AsyncSession) -> None:
 {esc(message.chat.title)}
 
 <b>Spawning</b>
-Enabled: {'Yes' if group.spawn_enabled else 'No'}
+Enabled: {"Yes" if group.spawn_enabled else "No"}
 Spawn Threshold: {group.spawn_threshold} messages
-Spawn Channel: {'Set' if group.spawn_channel_id else 'Not set'}
+Spawn Channel: {"Set" if group.spawn_channel_id else "Not set"}
 
 <b>Features</b>
-Battles Enabled: {'Yes' if group.battles_enabled else 'No'}
+Battles Enabled: {"Yes" if group.battles_enabled else "No"}
 Language: {group.language.upper()}
 
 <b>Stats</b>
@@ -1023,6 +1050,7 @@ Total Catches: {group.total_catches}
 # ------------------------------------------------------------------ #
 # /deregister  — reset a user to pre-starter state
 # ------------------------------------------------------------------ #
+
 
 @router.message(Command("deregister"))
 async def cmd_deregister(message: Message, session: AsyncSession) -> None:
@@ -1063,9 +1091,7 @@ async def cmd_deregister(message: Message, session: AsyncSession) -> None:
             target_display = str(target_user_id)
         except ValueError:
             await message.answer(
-                "<b>Usage:</b>\n"
-                "<code>/deregister [user_id]</code>\n"
-                "Or reply to the user's message."
+                "<b>Usage:</b>\n<code>/deregister [user_id]</code>\nOr reply to the user's message."
             )
             return
 
@@ -1080,15 +1106,11 @@ async def cmd_deregister(message: Message, session: AsyncSession) -> None:
         return
 
     # Look up the target user record
-    result = await session.execute(
-        select(User).where(User.telegram_id == target_user_id)
-    )
+    result = await session.execute(select(User).where(User.telegram_id == target_user_id))
     target_user = result.scalar_one_or_none()
 
     if not target_user:
-        await message.answer(
-            f"User <code>{target_user_id}</code> not found in the database."
-        )
+        await message.answer(f"User <code>{target_user_id}</code> not found in the database.")
         return
 
     # Count their Pokemon
@@ -1105,9 +1127,7 @@ async def cmd_deregister(message: Message, session: AsyncSession) -> None:
         return
 
     # Delete all their Pokemon
-    await session.execute(
-        delete(Pokemon).where(Pokemon.owner_id == target_user_id)
-    )
+    await session.execute(delete(Pokemon).where(Pokemon.owner_id == target_user_id))
 
     # Reset selected pokemon
     target_user.selected_pokemon_id = None
@@ -1130,6 +1150,7 @@ async def cmd_deregister(message: Message, session: AsyncSession) -> None:
 # ------------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------------ #
+
 
 def _extract_target(message: Message) -> tuple[int | None, str]:
     """Extract target user_id and display name from reply or text_mention."""
@@ -1159,14 +1180,15 @@ def _extract_target(message: Message) -> tuple[int | None, str]:
 # Reload emoji maps
 # ------------------------------------------------------------------ #
 
+
 @router.message(Command("reload_emoji"))
 async def cmd_reload_emoji(message: Message) -> None:
     """Hot-reload all emoji map files without restarting the bot."""
-    if not message.from_user or message.from_user.id != BOT_OWNER_ID:
+    if not message.from_user or not _is_owner(message.from_user.id):
         await message.answer("Only the bot owner can use this command!")
         return
 
-    from telemon.core.emoji import reload_all_maps, mode_label
+    from telemon.core.emoji import mode_label, reload_all_maps
 
     counts = reload_all_maps()
     lines = [
