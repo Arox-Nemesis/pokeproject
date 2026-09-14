@@ -311,6 +311,9 @@ async def get_species_by_name_or_number(session: AsyncSession, query: str) -> Po
     Uses the full multi-word query to avoid false matches.
     """
     query = query.strip()
+    # Accept familiar Pokédex notation such as /pokedex #025.
+    if query.startswith("#"):
+        query = query[1:].strip()
 
     # Try as number first
     if query.isdigit():

@@ -23,16 +23,16 @@ _EVOLUTION_DATA: dict[str, Any] = {}
 # trigger defaults to 1 and the Pokemon evolves the moment it is caught, so each
 # one gets the level it is realistically reachable at instead.
 _MIN_LEVEL_FALLBACKS: dict[tuple[int, int], int] = {
-    (83, 865): 30,    # Farfetch'd -> Sirfetch'd (3 crits in one battle)
-    (211, 904): 30,   # Qwilfish -> Overqwil (Barb Barrage x20)
-    (234, 899): 30,   # Stantler -> Wyrdeer (Psyshield Bash x20)
-    (290, 292): 20,   # Nincada -> Shedinja (spare party slot at Ninjask's level)
-    (550, 902): 30,   # Basculin -> Basculegion (recoil damage)
-    (562, 867): 34,   # Yamask -> Runerigus (damage + Dusty Bowl)
-    (625, 983): 52,   # Bisharp -> Kingambit (defeat 3 Bisharp leaders)
-    (868, 869): 30,   # Milcery -> Alcremie (spin with a sweet)
-    (891, 892): 40,   # Kubfu -> Urshifu (Tower of Darkness/Waters)
-    (924, 925): 25,   # Tandemaus -> Maushold (canon level 25)
+    (83, 865): 30,  # Farfetch'd -> Sirfetch'd (3 crits in one battle)
+    (211, 904): 30,  # Qwilfish -> Overqwil (Barb Barrage x20)
+    (234, 899): 30,  # Stantler -> Wyrdeer (Psyshield Bash x20)
+    (290, 292): 20,  # Nincada -> Shedinja (spare party slot at Ninjask's level)
+    (550, 902): 30,  # Basculin -> Basculegion (recoil damage)
+    (562, 867): 34,  # Yamask -> Runerigus (damage + Dusty Bowl)
+    (625, 983): 52,  # Bisharp -> Kingambit (defeat 3 Bisharp leaders)
+    (868, 869): 30,  # Milcery -> Alcremie (spin with a sweet)
+    (891, 892): 40,  # Kubfu -> Urshifu (Tower of Darkness/Waters)
+    (924, 925): 25,  # Tandemaus -> Maushold (canon level 25)
     (999, 1000): 45,  # Gimmighoul -> Gholdengo (999 coins)
 }
 
@@ -246,6 +246,26 @@ async def check_evolution(
         use_item = None
         use_item_lower = None
 
+    # Custom item route: Cosmoem must use the store-only Lunala Stone for
+    # Lunala.  This deliberately replaces the ambiguous raw data branch.
+    if species_id == 790 and use_item_lower == "lunala stone":
+        if pokemon.level < 53:
+            return EvolutionResult(
+                can_evolve=False,
+                evolved_species_id=792,
+                evolved_species_name="Lunala",
+                trigger="item",
+                requirement="Level 53+ + Lunala Stone",
+                missing_requirement=f"Needs to reach level 53 (currently {pokemon.level})",
+            )
+        return EvolutionResult(
+            can_evolve=True,
+            evolved_species_id=792,
+            evolved_species_name="Lunala",
+            trigger="item",
+            requirement="Level 53+ + Lunala Stone",
+        )
+
     # Find evolution chain for this species
     possible_evolutions = _evolutions_for_species(species_id)
 
@@ -354,7 +374,11 @@ async def check_evolution(
                     trigger="item",
                     requirement=required_item.title(),
                     missing_requirement=f"Requires {required_item.title()}"
-                    + (" (you have it! Use: /evolve [num] {})".format(required_item) if has_item else " (buy from /shop)"),
+                    + (
+                        " (you have it! Use: /evolve [num] {})".format(required_item)
+                        if has_item
+                        else " (buy from /shop)"
+                    ),
                 )
 
         elif trigger == "trade":
@@ -495,18 +519,14 @@ async def evolve_pokemon(
     using_linking_cord = use_item_lower == "linking cord"
 
     # Check if can evolve
-    result = await check_evolution(
-        session, pokemon, user_id, use_item, is_trade, target_species_id
-    )
+    result = await check_evolution(session, pokemon, user_id, use_item, is_trade, target_species_id)
 
     if not result.can_evolve:
         return False, result.missing_requirement or "Cannot evolve."
 
     # Get the evolved species
     species_result = await session.execute(
-        select(PokemonSpecies).where(
-            PokemonSpecies.national_dex == result.evolved_species_id
-        )
+        select(PokemonSpecies).where(PokemonSpecies.national_dex == result.evolved_species_id)
     )
     evolved_species = species_result.scalar_one_or_none()
 
@@ -549,7 +569,10 @@ async def evolve_pokemon(
         evolution_data = get_evolution_data()
         for chain_id, chain_data in evolution_data.items():
             for evo in chain_data.get("chain", []):
-                if evo["species_id"] == pokemon.species_id and evo["evolves_to"] == result.evolved_species_id:
+                if (
+                    evo["species_id"] == pokemon.species_id
+                    and evo["evolves_to"] == result.evolved_species_id
+                ):
                     trade_item = evo.get("item")
                     if trade_item and trade_item != "none":
                         item_data = ITEM_BY_NAME.get(trade_item.lower())
@@ -572,6 +595,7 @@ async def evolve_pokemon(
 
     # Pick new ability from evolved species
     import random
+
     if evolved_species.abilities:
         pokemon.ability = random.choice(evolved_species.abilities)
 
@@ -584,9 +608,7 @@ async def evolve_pokemon(
 
         known = list(pokemon.moves or [])
         if len(known) < MAX_MOVES:
-            learnable = await get_learnable_moves(
-                session, pokemon.species_id, pokemon.level
-            )
+            learnable = await get_learnable_moves(session, pokemon.species_id, pokemon.level)
             # Highest-level moves first -- those are the ones the evolved form
             # gained access to.
             for entry in reversed(learnable):
@@ -604,9 +626,11 @@ async def evolve_pokemon(
 
     # Record which alternate form this Pokemon is now in, so displays and future
     # lookups do not have to re-derive it from the species id.
-    pokemon.form = regional.get_form(pokemon.species_id).region if regional.is_regional(
-        pokemon.species_id
-    ) else None
+    pokemon.form = (
+        regional.get_form(pokemon.species_id).region
+        if regional.is_regional(pokemon.species_id)
+        else None
+    )
 
     await session.commit()
 

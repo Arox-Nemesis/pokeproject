@@ -14,10 +14,9 @@ logger = get_logger(__name__)
 async def timed_spawn_loop(bot) -> None:
     """Background task: periodically spawn Pokemon in active groups.
 
-    Each spawn-enabled group gets a random no-activity spawn interval
-    between 10-20 minutes.  The loop checks every 60 seconds and fires
-    a timed spawn if the group's interval has elapsed since its last spawn
-    and there is no active (uncaught) spawn.
+    Quiet groups receive a first spawn after three minutes.  After a successful
+    spawn the bot gives players a ten-minute catch window, then waits a fresh
+    random three-to-nine-minute quiet interval before spawning again.
     """
     import random
     from datetime import datetime, timedelta
@@ -36,14 +35,14 @@ async def timed_spawn_loop(bot) -> None:
 
     def _get_interval(chat_id: int) -> float:
         if chat_id not in _group_intervals:
-            lo = get_runtime_config("timed_spawn_min", 10)
-            hi = get_runtime_config("timed_spawn_max", 20)
+            lo = get_runtime_config("timed_spawn_min", 3)
+            hi = get_runtime_config("timed_spawn_max", 9)
             _group_intervals[chat_id] = random.uniform(lo, hi)
         return _group_intervals[chat_id]
 
     def _reroll_interval(chat_id: int) -> None:
-        lo = get_runtime_config("timed_spawn_min", 10)
-        hi = get_runtime_config("timed_spawn_max", 20)
+        lo = get_runtime_config("timed_spawn_min", 3)
+        hi = get_runtime_config("timed_spawn_max", 9)
         _group_intervals[chat_id] = random.uniform(lo, hi)
 
     while True:
@@ -56,10 +55,14 @@ async def timed_spawn_loop(bot) -> None:
 
                 for group in groups:
                     interval_mins = _get_interval(group.chat_id)
-                    cutoff = now - timedelta(minutes=interval_mins)
-
-                    # Skip groups that spawned recently
-                    if group.last_spawn_at and group.last_spawn_at > cutoff:
+                    # First quiet spawn is three minutes after the bot joined.
+                    # Subsequent spawns have a fixed 10-minute catch window,
+                    # followed by the randomized three-to-nine-minute interval.
+                    anchor = group.last_spawn_at or group.bot_joined_at or group.created_at
+                    required_wait = (
+                        interval_mins if group.last_spawn_at is None else 10 + interval_mins
+                    )
+                    if anchor and now < anchor + timedelta(minutes=required_wait):
                         continue
 
                     # Skip if there's already an active spawn
@@ -67,11 +70,26 @@ async def timed_spawn_loop(bot) -> None:
                     if active:
                         continue
 
-                    # Only spawn in groups that have had at least some activity
-                    if group.total_spawns == 0 and group.message_count < 5:
-                        continue
+                    # Owner batch spawns are persisted in group settings so they
+                    # survive restarts.  The next queued Pokémon is delivered
+                    # only after the previous one has been caught or expired.
+                    queued = (group.settings or {}).get("forced_spawn_queue")
+                    if queued and queued.get("remaining", 0) > 0:
+                        from telemon.bot.handlers.admin import _resolve_species
 
-                    species = await get_random_species(session)
+                        filters = queued.get("filters", {})
+                        queued_args = {"name": None, "stats": {}, **filters}
+                        species, queue_error = await _resolve_species(session, queued_args)
+                        if queue_error or species is None:
+                            settings_data = dict(group.settings or {})
+                            settings_data.pop("forced_spawn_queue", None)
+                            group.settings = settings_data
+                            logger.warning(
+                                "Cancelled invalid forced spawn queue", chat_id=group.chat_id
+                            )
+                            continue
+                    else:
+                        species = await get_random_species(session)
                     if not species:
                         continue
 
@@ -134,6 +152,15 @@ async def timed_spawn_loop(bot) -> None:
                             # Only update spawn stats after confirmed delivery
                             group.total_spawns += 1
                             group.last_spawn_at = datetime.utcnow()
+                            queued = (group.settings or {}).get("forced_spawn_queue")
+                            if queued and queued.get("remaining", 0) > 0:
+                                settings_data = dict(group.settings or {})
+                                queued["remaining"] -= 1
+                                if queued["remaining"] > 0:
+                                    settings_data["forced_spawn_queue"] = queued
+                                else:
+                                    settings_data.pop("forced_spawn_queue", None)
+                                group.settings = settings_data
 
                             await session.commit()
                             logger.info(

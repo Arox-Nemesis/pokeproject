@@ -187,3 +187,13 @@ Owner category spawns remain group-only. Use standard filters such as `/spawn le
 `/pokemon <name>` lists every matching caught Pokémon while preserving its original catch serial number. Collection filters include `rare`, `legendary`, `mythical`, `ultra_beast`, `unique`, `shiny`, `type:<type>`, and `gen:<number>`. Use `sort:level`, `sort:iv`, `sort:dex`, `sort:name`, or `sort:rarity`.
 
 Regional forms, the existing evolution-item catalogue, and Mega Evolutions are already supported. Use `/shop` to obtain evolution items and Mega Stones, `/evolve` for normal item/level evolutions, and `/mega` / `/demega` for supported Mega forms. Gigantamax is not enabled because the current species data and battle system do not provide a complete, balanced Gigantamax form set; this avoids offering transformations that cannot function correctly in battles.
+
+## Quiet-group spawning and owner batches
+
+Groups no longer need activity to begin spawning. A group’s first wild Pokémon is eligible **three minutes** after the bot joins. After every delivered wild Pokémon, the bot reserves a **10-minute catch window** and then waits a randomized **3–9 minutes** before the next wild spawn. Message-based spawning still works as an additional trigger.
+
+`/spawn` category and batch spawning is authenticated by `OWNER_ID`, not by `OWNER_GROUP_ID`. The owner can use `/spawn legendary gen4`, `/spawn type:fire 5`, `/spawn mythical 10`, `/spawn ultra_rare 3`, or `/spawn --shiny 2`. Batch Pokémon are queued persistently and appear one at a time after the preceding forced spawn is caught or expires, preventing overlapping uncapturable spawns.
+
+Pokédex lookups accept the conventional number notation: `/pokedex #25` and `/pokedex 25` both open Pikachu’s entry.
+
+Cosmoem has a dedicated Lunala route: at level 53 or above, use a **Lunala Stone** (`/evolve <serial> lunala stone`). It is sold in `/shop` for 20,000 coins and is consumed by the evolution.

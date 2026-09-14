@@ -47,8 +47,8 @@ _CONFIG_KEYS: dict[str, tuple[int, int, str]] = {
 # Default values used when no override is set (matches settings.py defaults)
 _CONFIG_DEFAULTS: dict[str, int] = {
     "flee_enabled": 1,
-    "timed_spawn_min": 10,
-    "timed_spawn_max": 20,
+    "timed_spawn_min": 3,
+    "timed_spawn_max": 9,
 }
 
 
@@ -175,6 +175,7 @@ def _parse_spawn_args(text: str) -> dict:
         "type": None,
         "rarity": None,
         "shiny": False,
+        "count": 1,
         "stats": {
             "level": None,
             "iv_percent": None,
@@ -205,6 +206,11 @@ def _parse_spawn_args(text: str) -> dict:
 
     for token in tokens:
         lower = token.lower().rstrip(",")
+
+        # Batch count: supported for owner category/type/shiny spawns.
+        if lower.isdigit() and 1 <= int(lower) <= 100:
+            result["count"] = int(lower)
+            continue
 
         # --shiny flag
         if lower in ("--shiny", "-s"):
@@ -611,6 +617,13 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
         msg_id = await send_spawn_message(bot, chat_id, spawn)
         if msg_id:
             spawn.message_id = msg_id
+            if args["count"] > 1:
+                group_settings = dict(group.settings or {})
+                group_settings["forced_spawn_queue"] = {
+                    "remaining": args["count"] - 1,
+                    "filters": {key: args[key] for key in ("gen", "type", "rarity", "shiny")},
+                }
+                group.settings = group_settings
             await session.commit()
 
             # Build log details
@@ -623,6 +636,8 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
                 details.append(args["rarity"])
             if args["shiny"]:
                 details.append("shiny")
+            if args["count"] > 1:
+                details.append(f"batch:{args['count']}")
             if force_stats:
                 details.append(f"stats:{force_stats}")
 
