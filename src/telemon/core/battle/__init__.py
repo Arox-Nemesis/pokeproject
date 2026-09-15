@@ -691,6 +691,21 @@ async def execute_move(
         
         battle.winner_xp = base_xp
         battle.winner_coins = base_coins
+
+        # Record one completed PvP battle for each participating Pokemon.
+        battle_time = datetime.utcnow()
+        try:
+            from zoneinfo import ZoneInfo
+            from telemon.config import settings
+            local_battle_time = datetime.now(ZoneInfo(getattr(settings, "evolution_timezone", "UTC")))
+            is_night = local_battle_time.hour >= 20 or local_battle_time.hour < 6
+        except Exception:
+            is_night = battle_time.hour >= 20 or battle_time.hour < 6
+        for combatant in (attacker_poke, defender_poke):
+            combatant.battle_count += 1
+            combatant.pvp_battle_count += 1
+            combatant.last_battle_at = battle_time
+            combatant.last_battle_was_night = is_night
     else:
         # Switch turns
         battle.whose_turn = battle.player2_id if is_p1 else battle.player1_id
