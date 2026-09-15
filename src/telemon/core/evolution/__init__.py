@@ -46,6 +46,10 @@ def _evo_key(evo: dict[str, Any]) -> tuple:
         evo.get("min_level"),
         evo.get("item"),
         evo.get("min_friendship"),
+        evo.get("target_form"),
+        evo.get("held_item"),
+        evo.get("min_battles"),
+        evo.get("time"),
     )
 
 
@@ -163,6 +167,7 @@ class EvolutionResult:
         trigger: str | None = None,
         requirement: str | None = None,
         missing_requirement: str | None = None,
+        evolved_form: str | None = None,
     ):
         self.can_evolve = can_evolve
         self.evolved_species_id = evolved_species_id
@@ -170,6 +175,7 @@ class EvolutionResult:
         self.trigger = trigger
         self.requirement = requirement
         self.missing_requirement = missing_requirement
+        self.evolved_form = evolved_form
 
 
 def _is_satisfiable(
@@ -207,6 +213,56 @@ async def _species_names(session: AsyncSession, dex_ids: list[int]) -> dict[int,
     return dict(result.all())
 
 
+# Generalized form-evolution rules. Multiple rules may share one target
+# species and differ only by form/conditions.
+FORM_EVOLUTION_RULES: dict[int, tuple[dict[str, Any], ...]] = {
+    744: (
+        {"evolves_to": 745, "target_form": "midday", "min_level": 25, "time": "day"},
+        {
+            "evolves_to": 745, "target_form": "midnight", "min_level": 25,
+            "time": "night", "held_item": "dusk rock", "min_battles": 20, "battle_at_night": True,
+        },
+        {"evolves_to": 745, "target_form": "dusk", "min_level": 25, "time": "dusk"},
+    ),
+}
+
+def _evolution_time_period() -> str:
+    """Return day/dusk/night using the configured local evolution timezone."""
+    try:
+        from telemon.config import settings
+        tz_name = getattr(settings, "evolution_timezone", "UTC")
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        now = datetime.utcnow()
+    hour = now.hour
+    if hour >= 20 or hour < 6:
+        return "night"
+    if 17 <= hour < 20 or 6 <= hour < 8:
+        return "dusk"
+    return "day"
+
+
+def _custom_form_evolutions(species_id: int) -> list[dict[str, Any]]:
+    return [dict(rule) for rule in FORM_EVOLUTION_RULES.get(species_id, ())]
+
+
+def _custom_rule_matches(rule: dict[str, Any], pokemon: Pokemon, use_item_lower: str | None) -> tuple[bool, str | None]:
+    if pokemon.level < rule.get("min_level", 1):
+        return False, f"Needs to reach level {rule['min_level']} (currently {pokemon.level})"
+    required_item = rule.get("held_item")
+    if required_item and (pokemon.held_item or "").lower() != required_item.lower():
+        return False, f"Pokemon must be holding {required_item.title()}"
+    min_battles = rule.get("min_battles")
+    if min_battles is not None and pokemon.battle_count < min_battles:
+        return False, f"Needs at least {min_battles} battles (currently {pokemon.battle_count})"
+    required_time = rule.get("time")
+    if required_time and _evolution_time_period() != required_time:
+        return False, f"This evolution requires {required_time}"
+    if rule.get("battle_at_night") and not pokemon.last_battle_was_night:
+        return False, "At least one completed battle must have taken place at night"
+    return True, None
+
+
 async def check_evolution(
     session: AsyncSession,
     pokemon: Pokemon,
@@ -233,6 +289,38 @@ async def check_evolution(
         EvolutionResult with evolution details
     """
     species_id = pokemon.species_id
+
+    # Data-driven branching form evolutions. These rules are evaluated before
+    # the generic PokeAPI chain so a single species can have multiple forms.
+    custom_rules = _custom_form_evolutions(species_id)
+    if custom_rules:
+        rules = custom_rules
+        if target_species_id is not None:
+            rules = [r for r in rules if r["evolves_to"] == target_species_id]
+        if target_form is not None:
+            rules = [r for r in rules if r.get("target_form") == target_form.lower()]
+        matching = []
+        failures = []
+        for rule in rules:
+            ok, missing = _custom_rule_matches(rule, pokemon, use_item_lower)
+            if ok:
+                matching.append(rule)
+            elif missing:
+                failures.append(missing)
+        if matching:
+            # If multiple forms are currently valid, require an explicit form
+            # target instead of silently choosing one.
+            if len(matching) > 1:
+                options = ", ".join(r["target_form"].title() for r in matching)
+                return EvolutionResult(False, evolved_species_id=745, evolved_species_name="Lycanroc", trigger="form", missing_requirement=f"Choose a form: {options}")
+            rule = matching[0]
+            target = rule["evolves_to"]
+            result = await session.execute(select(PokemonSpecies).where(PokemonSpecies.national_dex == target))
+            target_species = result.scalar_one_or_none()
+            return EvolutionResult(True, target, target_species.name if target_species else "Lycanroc", "form", f"Level {rule['min_level']}+ + {rule.get('time', 'special')} conditions", evolved_form=rule["target_form"])
+        # A requested branch can be identified by item/time even when it is not
+        # currently valid; show all unmet requirements.
+        return EvolutionResult(False, evolved_species_id=745, evolved_species_name="Lycanroc", trigger="form", missing_requirement="; ".join(dict.fromkeys(failures)) or "Form evolution requirements are not met.")
 
     # Special case: if the user is using a Linking Cord, treat as trade
     use_item_lower = use_item.lower().strip() if use_item else None
@@ -500,6 +588,7 @@ async def evolve_pokemon(
     use_item: str | None = None,
     is_trade: bool = False,
     target_species_id: int | None = None,
+    target_form: str | None = None,
 ) -> tuple[bool, str]:
     """
     Attempt to evolve a Pokemon.
@@ -519,7 +608,7 @@ async def evolve_pokemon(
     using_linking_cord = use_item_lower == "linking cord"
 
     # Check if can evolve
-    result = await check_evolution(session, pokemon, user_id, use_item, is_trade, target_species_id)
+    result = await check_evolution(session, pokemon, user_id, use_item, is_trade, target_species_id, target_form)
 
     if not result.can_evolve:
         return False, result.missing_requirement or "Cannot evolve."
@@ -626,7 +715,7 @@ async def evolve_pokemon(
 
     # Record which alternate form this Pokemon is now in, so displays and future
     # lookups do not have to re-derive it from the species id.
-    pokemon.form = (
+    pokemon.form = result.evolved_form or (
         regional.get_form(pokemon.species_id).region
         if regional.is_regional(pokemon.species_id)
         else None
@@ -649,5 +738,5 @@ async def evolve_pokemon(
 
 
 def get_possible_evolutions(species_id: int) -> list[dict]:
-    """Get all possible evolutions for a species."""
-    return _evolutions_for_species(species_id)
+    """Get all generic and custom form evolutions for a species."""
+    return _dedupe([*_evolutions_for_species(species_id), *_custom_form_evolutions(species_id)])
