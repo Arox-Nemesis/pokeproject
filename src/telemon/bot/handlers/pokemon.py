@@ -954,19 +954,30 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
     # The trailing text is an item name ("fire stone") for item evolutions, or
     # the name of one branch ("umbreon") when a Pokemon can evolve several ways.
     target_species_id = None
+    target_form = None
     if item_name and item_name.lower().strip() not in ITEM_BY_NAME:
         wanted = item_name.lower().strip()
         candidates = get_possible_evolutions(poke.species_id)
+        # Form branches (e.g. Lycanroc Midnight) share a species id, so
+        # identify them by their target_form metadata rather than dex id.
+        for candidate in candidates:
+            form_name = candidate.get("target_form")
+            if form_name and wanted in {form_name.lower(), f"lycanroc {form_name.lower()}"}:
+                target_species_id = candidate["evolves_to"]
+                target_form = form_name.lower()
+                item_name = None
+                break
         names = await session.execute(
             select(PokemonSpecies.national_dex, PokemonSpecies.name_lower).where(
                 PokemonSpecies.national_dex.in_([e["evolves_to"] for e in candidates])
             )
         )
-        for dex, name_lower in names.all():
-            if name_lower == wanted or name_lower.replace("-", " ") == wanted:
-                target_species_id = dex
-                item_name = None
-                break
+        if target_species_id is None:
+            for dex, name_lower in names.all():
+                if name_lower == wanted or name_lower.replace("-", " ") == wanted:
+                    target_species_id = dex
+                    item_name = None
+                    break
 
     # Check evolution possibilities
     evo_result = await check_evolution(
@@ -975,6 +986,7 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
         user.telegram_id,
         use_item=item_name,
         target_species_id=target_species_id,
+        target_form=target_form,
     )
 
     if evo_result.can_evolve:
@@ -985,6 +997,7 @@ async def cmd_evolve(message: Message, session: AsyncSession, user: User) -> Non
             user.telegram_id,
             use_item=item_name,
             target_species_id=target_species_id,
+            target_form=target_form,
         )
 
         if success:

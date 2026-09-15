@@ -10,7 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from telemon.config import settings
-from telemon.core.constants import MAX_GENERATION, RARITY_KEYWORDS, VALID_TYPES
+from telemon.core.constants import MAX_GENERATION, RARITY_KEYWORDS, ULTRA_BEAST_DEX_IDS, VALID_TYPES
 from telemon.core.spawning import create_spawn, get_random_species
 from telemon.core.text import esc
 from telemon.database.models import (
@@ -275,7 +275,11 @@ def _parse_spawn_args(text: str) -> dict:
         if stat_matched:
             continue
 
-        # Rarity keywords
+        # Rarity keywords and common aliases.
+        if lower in {"ub", "ultra_beast", "ultra-beast", "ultra beast"}:
+            result["rarity"] = "ultra_beast"
+            result["perms_needed"].add("rarity")
+            continue
         if lower in RARITY_KEYWORDS:
             result["rarity"] = lower
             result["perms_needed"].add("rarity")
@@ -468,11 +472,13 @@ async def _resolve_species(
         filters.append((PokemonSpecies.type1 == ptype) | (PokemonSpecies.type2 == ptype))
 
     if args["rarity"]:
-        # Reuse the spawn engine's tier definition so /spawn and wild spawns
-        # can never disagree about what counts as e.g. "rare".
-        from telemon.core.spawning.engine import _rarity_condition
-
-        filters.append(_rarity_condition(args["rarity"]))
+        if args["rarity"] == "ultra_beast":
+            filters.append(PokemonSpecies.national_dex.in_(ULTRA_BEAST_DEX_IDS))
+        else:
+            # Reuse the spawn engine's tier definition so /spawn and wild spawns
+            # can never disagree about what counts as e.g. "rare".
+            from telemon.core.spawning.engine import _rarity_condition
+            filters.append(_rarity_condition(args["rarity"]))
 
     if filters:
         for f in filters:
@@ -523,32 +529,10 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
     # Parse arguments
     args = _parse_spawn_args(message.text or "")
 
-    # When an owner group is configured, category and generation force-spawns
-    # are deliberately confined there.  This prevents a powerful owner tool
-    # from accidentally affecting an unrelated public group.
-    if (
-        _is_owner(user_id)
-        and settings.owner_group_id is not None
-        and message.chat.id != settings.owner_group_id
-        and (args["rarity"] is not None or args["gen"] is not None)
-    ):
-        await message.answer(
-            "Category and generation spawns are limited to the configured owner group."
-        )
-        return
-
-    # Check granular permissions
-    admin = await get_spawn_admin(session, user_id)
-    missing_perms: list[str] = []
-    for perm in args["perms_needed"]:
-        if not _check_perm(user_id, admin, perm):
-            missing_perms.append(perm)
-
-    if missing_perms:
-        await message.answer(
-            f"You don't have permission for: <b>{', '.join(missing_perms)}</b>\n"
-            f"Ask the bot owner to grant them via /grant."
-        )
+    # /spawn is deliberately owner-only. OWNER_GROUP_ID is the owner's
+    # management group and must never restrict where the owner can spawn.
+    if not _is_owner(user_id):
+        await message.answer("Only the bot owner can use /spawn!")
         return
 
     chat_id = message.chat.id
@@ -571,6 +555,7 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
         select(ActiveSpawn)
         .where(ActiveSpawn.chat_id == chat_id)
         .where(ActiveSpawn.caught_by.is_(None))
+        .where(ActiveSpawn.message_id != 0)
         .where(ActiveSpawn.expires_at > datetime.utcnow())
     )
     existing = result.scalar_one_or_none()
@@ -617,11 +602,23 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
         msg_id = await send_spawn_message(bot, chat_id, spawn)
         if msg_id:
             spawn.message_id = msg_id
+            group.total_spawns += 1
+            group.last_spawn_at = datetime.utcnow()
             if args["count"] > 1:
                 group_settings = dict(group.settings or {})
                 group_settings["forced_spawn_queue"] = {
                     "remaining": args["count"] - 1,
-                    "filters": {key: args[key] for key in ("gen", "type", "rarity", "shiny")},
+                    # Preserve the COMPLETE original request.  This makes
+                    # `/spawn pikachu 5` queue Pikachu x5 rather than turning
+                    # the remaining four entries into random Pokemon.
+                    "args": {
+                        "name": args["name"],
+                        "gen": args["gen"],
+                        "type": args["type"],
+                        "rarity": args["rarity"],
+                        "shiny": args["shiny"],
+                        "stats": dict(args["stats"]),
+                    },
                 }
                 group.settings = group_settings
             await session.commit()
@@ -650,8 +647,13 @@ async def cmd_spawn(message: Message, session: AsyncSession, bot: Bot) -> None:
                 filters=" ".join(details),
             )
         else:
+            await session.delete(spawn)
+            await session.commit()
             await message.answer("Failed to send spawn message!")
     except Exception as e:
+        # Never leave an undelivered message_id=0 row blocking this group.
+        await session.delete(spawn)
+        await session.commit()
         logger.error("Failed to send spawn message", error=str(e), chat_id=chat_id)
         await message.answer(f"Failed to send spawn message: {e}")
 

@@ -1,6 +1,6 @@
 """Shop, inventory, and item usage handlers."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -18,6 +18,7 @@ from telemon.core.items import (
     LINKING_CORD_ID,
     RARE_CANDY_ID,
     SOOTHE_BELL_ID,
+    DUSK_ROCK_ID,
     XP_BOOST_ID,
 )
 from telemon.config import BOT_NAME, CURRENCY_SHORT
@@ -536,6 +537,17 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
             )
             return
 
+        # Dusk Rock is a reusable held item, not a direct evolution stone.
+        if item_id == DUSK_ROCK_ID:
+            poke.held_item = item.name
+            inventory_item.quantity -= 1
+            await session.commit()
+            await message.answer(
+                f"🪨 <b>{item.name}</b> is now held by {esc(poke.display_name)}.\n"
+                "It can enable the special Midnight form when the evolution conditions are met."
+            )
+            return
+
         # Is this a Linking Cord?
         if item_id == LINKING_CORD_ID:
             # Try trade evolution
@@ -666,9 +678,10 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
     if item_id == INCENSE_ID:
         from telemon.config import settings
 
-        # Runtime-configurable spawn count
-        from telemon.bot.handlers.admin import get_runtime_config
-        spawn_count = get_runtime_config("incense_count", settings.incense_spawn_count)
+        # Runtime-configurable spawn count. Group values are resolved after
+        # the group is known; DMs use the global default.
+        from telemon.bot.handlers.admin import get_runtime_config, get_group_runtime_config
+        spawn_count = int(get_runtime_config("incense_spawn_count", settings.incense_spawn_count))
 
         is_group = message.chat.type in ("group", "supergroup")
 
@@ -689,22 +702,47 @@ async def cmd_use(message: Message, session: AsyncSession, user: User) -> None:
                 )
                 return
 
-            # Check if group already has active incense
-            from telemon.database.models import Group
+            # Default allowance is one activation per user per group in 12h.
+            # OWNER_GROUP_ID is not a bypass; the same rule applies to everyone.
+            from telemon.database.models import Group, IncenseUsage
             group_result = await session.execute(
                 select(Group).where(Group.chat_id == message.chat.id)
             )
             group = group_result.scalar_one_or_none()
-            if group and group.incense_spawns_remaining > 0:
+            if group is None:
+                from datetime import datetime
+                group = Group(chat_id=message.chat.id, title=message.chat.title, bot_joined_at=datetime.utcnow())
+                session.add(group)
+                await session.flush()
+
+            spawn_count = int(get_group_runtime_config(group, "incense_spawn_count", settings.incense_spawn_count))
+            max_uses = int(get_group_runtime_config(group, "incense_max_uses_12h", 1))
+            window_hours = int(get_group_runtime_config(group, "incense_window_hours", 12))
+            cutoff = datetime.utcnow() - timedelta(hours=window_hours)
+            usage_result = await session.execute(
+                select(IncenseUsage)
+                .where(IncenseUsage.user_id == user.telegram_id)
+                .where(IncenseUsage.chat_id == message.chat.id)
+                .where(IncenseUsage.used_at >= cutoff)
+            )
+            uses = len(usage_result.scalars().all())
+            if uses >= max_uses:
+                await message.answer(
+                    f"🕐 You have used Incense {uses}/{max_uses} time(s) in this group "
+                    f"during the last {window_hours} hours."
+                )
+                return
+
+            if group.incense_spawns_remaining > 0:
                 await message.answer(
                     f"🕐 Group Incense is already active! ({group.incense_spawns_remaining} spawns remaining)"
                 )
                 return
 
-            # Activate group incense
-            if group:
-                group.incense_spawns_remaining = spawn_count
-                group.incense_activated_by = user.telegram_id
+            # Activate group incense and persist the consumed activation.
+            group.incense_spawns_remaining = spawn_count
+            group.incense_activated_by = user.telegram_id
+            session.add(IncenseUsage(user_id=user.telegram_id, chat_id=message.chat.id))
             inventory_item.quantity -= 1
             await session.commit()
 

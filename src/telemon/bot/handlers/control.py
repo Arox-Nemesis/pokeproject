@@ -98,6 +98,8 @@ SETTING_SPECS = (
         3,
         3600,
     ),
+    SettingSpec("incense_max_uses_12h", "Incense uses per user / 12h", 1, 1, 100),
+    SettingSpec("incense_window_hours", "Incense cooldown window (hours)", 12, 1, 168),
 )
 _SPEC_BY_KEY = {spec.key: spec for spec in SETTING_SPECS}
 # Owner input state is intentionally tiny and ephemeral; stored values are in PostgreSQL.
@@ -153,7 +155,6 @@ def _panel_keyboard(groups: list[Group]) -> InlineKeyboardBuilder:
     builder.button(text="⚙️ Default", callback_data="control:default")
     for number, group in enumerate(groups, 1):
         builder.button(text=f"Group {number:02d}", callback_data=f"control:group:{group.chat_id}")
-    builder.button(text="➕ Add", callback_data="control:add")
     builder.adjust(2)
     return builder
 
@@ -175,9 +176,9 @@ async def _show_panel(message: Message | CallbackQuery, session: AsyncSession) -
     )
     text = (
         "<b>Owner Control Panel</b>\n\n"
-        "<b>Default</b> changes the baseline used by every group.\n"
-        "<b>Add</b> lets you send a Telegram group ID, creating a group-specific override.\n"
-        "Group changes override Default only for that group."
+        "<b>Default</b> changes the baseline used by groups without an override.\n"
+        "Select an existing bot group to change only that group's settings.\n"
+        "This panel is available only in OWNER_GROUP_ID."
     )
     markup = _panel_keyboard(groups).as_markup()
     if isinstance(message, CallbackQuery):
@@ -194,9 +195,6 @@ async def cmd_control(message: Message, session: AsyncSession) -> None:
         await message.answer("This owner control is only available in the configured owner group.")
         return
     parts = (message.text or "").split()
-    if len(parts) == 3 and parts[1].lower() == "add":
-        await _add_group(message, session, parts[2])
-        return
     await _show_panel(message, session)
 
 
@@ -212,12 +210,6 @@ async def control_callback(callback: CallbackQuery, session: AsyncSession) -> No
     action = parts[1]
     if action == "home":
         await _show_panel(callback, session)
-    elif action == "add":
-        _pending_input[callback.from_user.id] = ("add", "")
-        await callback.message.answer(
-            "Send the numeric Telegram group ID to add it.\nExample: <code>-1001234567890</code>"
-        )
-        await callback.answer()
     elif action in {"default", "group"}:
         scope: str | int = "default" if action == "default" else int(parts[2])
         defaults = await _default_values(session)
@@ -247,20 +239,6 @@ async def control_callback(callback: CallbackQuery, session: AsyncSession) -> No
         await callback.answer()
 
 
-async def _add_group(message: Message, session: AsyncSession, value: str) -> None:
-    try:
-        chat_id = int(value)
-    except ValueError:
-        await message.answer(
-            "Send a numeric Telegram group ID, for example <code>-1001234567890</code>."
-        )
-        return
-    await _get_group(session, chat_id)
-    await session.commit()
-    await message.answer(
-        f"✅ Added group <code>{chat_id}</code>. Open /control and select it to set overrides."
-    )
-
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def control_input(message: Message, session: AsyncSession) -> None:
@@ -272,10 +250,6 @@ async def control_input(message: Message, session: AsyncSession) -> None:
         return
     mode, detail = pending
     value = (message.text or "").strip()
-    if mode == "add":
-        await _add_group(message, session, value)
-        return
-
     scope_text, key = str(detail).split(":", 1)
     spec = _SPEC_BY_KEY[key]
     try:

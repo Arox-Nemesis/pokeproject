@@ -651,6 +651,18 @@ def _pve_hp_bar(current: int, maximum: int, length: int = 10) -> str:
     return f"[{'█' * filled}{'░' * empty}] {current}/{maximum}"
 
 
+def _is_night_for_evolution() -> bool:
+    """Use the configured evolution timezone for battle-time conditions."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from telemon.config import settings
+    try:
+        hour = datetime.now(ZoneInfo(getattr(settings, "evolution_timezone", "UTC"))).hour
+    except Exception:
+        hour = datetime.utcnow().hour
+    return hour >= 20 or hour < 6
+
+
 def build_pve_move_keyboard(state: dict, user_id: int) -> InlineKeyboardBuilder:
     """Build move buttons for PvE battle."""
     builder = InlineKeyboardBuilder()
@@ -1071,6 +1083,19 @@ async def _handle_pve_win(
     user.balance += coin_reward
     xp_added, levels_gained, learned_moves = await add_xp_to_pokemon(session, pokemon_id, xp_reward)
 
+    # Battle history for condition-based evolutions.
+    poke_result = await session.execute(select(Pokemon).where(Pokemon.id == pokemon_id))
+    battle_poke = poke_result.scalar_one_or_none()
+    if battle_poke:
+        from datetime import datetime
+        battle_poke.battle_count += 1
+        battle_poke.last_battle_at = datetime.utcnow()
+        battle_poke.last_battle_was_night = _is_night_for_evolution()
+        if mode == "npc":
+            battle_poke.npc_battle_count += 1
+        else:
+            battle_poke.wild_battle_count += 1
+
     # Battle win stats (counts for PvE too)
     user.battle_wins += 1
     await session.commit()
@@ -1144,6 +1169,21 @@ async def _handle_pve_loss(
     """Handle player losing a PvE battle."""
     player_name = state["player"]["name"]
     enemy_label = state.get("enemy_label", "Wild Pokemon")
+
+    # Record completed PvE battles even when the player loses.
+    pokemon_id = state.get("pokemon_id")
+    if pokemon_id:
+        poke_result = await session.execute(select(Pokemon).where(Pokemon.id == pokemon_id))
+        battle_poke = poke_result.scalar_one_or_none()
+        if battle_poke:
+            from datetime import datetime
+            battle_poke.battle_count += 1
+            battle_poke.last_battle_at = datetime.utcnow()
+            battle_poke.last_battle_was_night = _is_night_for_evolution()
+            if state.get("mode") == "npc":
+                battle_poke.npc_battle_count += 1
+            else:
+                battle_poke.wild_battle_count += 1
 
     # Track PvE loss stat
     user.battle_losses += 1
