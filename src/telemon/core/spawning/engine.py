@@ -246,7 +246,24 @@ async def create_spawn(
     force_shiny: bool = False,
     force_stats: dict | None = None,
 ) -> ActiveSpawn | None:
-    """Create a new Pokemon spawn in a chat."""
+    """Create a new Pokemon spawn in a chat.
+
+    A PostgreSQL transaction lock serializes spawn creation for the same chat,
+    preventing the message-triggered handler and the background scheduler from
+    creating duplicate visible spawns at the same time.
+    """
+    await session.execute(select(func.pg_advisory_xact_lock(chat_id)))
+    existing_result = await session.execute(
+        select(ActiveSpawn.id)
+        .where(ActiveSpawn.chat_id == chat_id)
+        .where(ActiveSpawn.caught_by.is_(None))
+        .where(ActiveSpawn.message_id != 0)
+        .where(ActiveSpawn.expires_at > datetime.utcnow())
+        .limit(1)
+    )
+    if existing_result.scalar_one_or_none() is not None:
+        return None
+
     # Get random species if not provided
     if species is None:
         species = await get_random_species(session)
@@ -258,11 +275,13 @@ async def create_spawn(
     is_shiny = force_shiny or should_be_shiny()
 
     # Determine expiration based on flee toggle
-    from telemon.bot.handlers.admin import get_runtime_config
+    from telemon.bot.handlers.admin import get_group_runtime_config, get_runtime_config
 
-    flee_enabled = get_runtime_config("flee_enabled", 1)
+    group_result = await session.execute(select(Group).where(Group.chat_id == chat_id))
+    group = group_result.scalar_one_or_none()
+    flee_enabled = get_group_runtime_config(group, "flee_enabled", 1)
     if flee_enabled:
-        timeout = get_runtime_config("spawn_timeout", settings.spawn_timeout_seconds)
+        timeout = get_group_runtime_config(group, "spawn_timeout_seconds", settings.spawn_timeout_seconds)
         expires_at = datetime.utcnow() + timedelta(seconds=timeout)
     else:
         expires_at = datetime.utcnow() + timedelta(days=365 * 100)
@@ -289,9 +308,6 @@ async def create_spawn(
     session.add(spawn)
 
     # Update group stats
-    result = await session.execute(select(Group).where(Group.chat_id == chat_id))
-    group = result.scalar_one_or_none()
-
     if group:
         from telemon.bot.handlers.admin import get_group_runtime_config
 
