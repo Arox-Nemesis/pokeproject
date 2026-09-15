@@ -91,6 +91,14 @@ class Pokemon(Base):
     caught_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     caught_in_group_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
+    # Battle history used by condition-based evolutions and future quests.
+    battle_count: Mapped[int] = mapped_column(Integer, default=0)
+    wild_battle_count: Mapped[int] = mapped_column(Integer, default=0)
+    npc_battle_count: Mapped[int] = mapped_column(Integer, default=0)
+    pvp_battle_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_battle_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_battle_was_night: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Gender (male, female, or None for genderless)
     gender: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
@@ -110,6 +118,10 @@ class Pokemon(Base):
         if self.nickname:
             return self.nickname
         if self.species:
+            if self.form and self.species.forms:
+                form_data = self.species.forms.get(self.form)
+                if isinstance(form_data, dict) and form_data.get("name"):
+                    return str(form_data["name"])
             return self.species.name
         return f"Pokemon #{self.species_id}"
 
