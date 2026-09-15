@@ -145,8 +145,8 @@ class Settings(BaseSettings):
     # Spawning Configuration
     spawn_threshold_min: int = Field(default=20, ge=1, le=1000)
     spawn_threshold_max: int = Field(default=30, ge=1, le=1000)
-    spawn_time_min_minutes: int = Field(default=5, ge=1)
-    spawn_time_max_minutes: int = Field(default=15, ge=1)
+    spawn_time_min_minutes: int = Field(default=3, ge=1)
+    spawn_time_max_minutes: int = Field(default=9, ge=1)
     spawn_timeout_seconds: int = Field(default=300, ge=30)  # 5 minutes
     spawn_min_message_length: int = Field(default=3, ge=1)  # Min chars to count
     spawn_user_cooldown_seconds: float = Field(default=1.5, ge=0)  # Per-user cooldown
@@ -171,6 +171,9 @@ class Settings(BaseSettings):
         le=3600,
         description="Seconds between incense spawn attempts.",
     )
+
+    # Evolution form time rules
+    evolution_timezone: str = Field(default="UTC", description="IANA timezone used for day/dusk/night evolution rules.")
 
     # Shiny Configuration
     shiny_base_rate: int = Field(default=2049, ge=1)
