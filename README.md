@@ -2,6 +2,16 @@
 
 A Pokemon-style game bot for Telegram, inspired by Poketwo (Discord).
 
+## Updated owner spawning and incense rules
+
+- `/spawn` is **OWNER_ID-only** and works in every group where the bot is present; `OWNER_GROUP_ID` is not a spawn restriction.
+- Direct names are supported (`/spawn pikachu`, `/spawn latias`, `/spawn charizard`). Existing category/filter syntax remains supported, including `legendary`, `rare`, `uncommon`, `mythical`, `ub`, `type:<type>`, `gen:<number>`, `--shiny`, and batch counts.
+- Batch force-spawns are persisted and delivered sequentially: `/spawn legendary 5` queues five individual spawns rather than creating five simultaneous active spawns. Direct-name batches preserve the requested name.
+- Incense defaults to **1 activation per user per group per 12 hours**. The owner control panel can raise the per-group allowance (for example 2, 3, or 4). There is no owner-only unlimited-incense bypass.
+- The control panel is usable only from `OWNER_GROUP_ID`; arbitrary `/control add <group>` management has been removed. Existing group settings are applied by the runtime rather than being database-only values.
+- Spawn creation uses a PostgreSQL transaction lock per chat to prevent the message-trigger and background scheduler from racing into duplicate active spawns.
+- Rockruff form evolution now supports data-driven Midday/Midnight/Dusk branches, with Midnight requiring level 25+, a held Dusk Rock, 20 completed battles, and a night battle condition.
+
 ## Features
 
 - **Wild Pokemon Spawns** - Pokemon spawn in group chats based on activity
