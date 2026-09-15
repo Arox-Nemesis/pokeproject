@@ -360,6 +360,17 @@ ALL_ITEMS: list[dict[str, Any]] = [
         "description": "Evolves Hisuian Sneasel into Sneasler.",
     },
     {
+        "id": 35,
+        "name": "Dusk Rock",
+        "name_lower": "dusk rock",
+        "category": "evolution",
+        "cost": 5000,
+        "sell_price": 2500,
+        "is_consumable": False,
+        "is_holdable": True,
+        "description": "A mysterious rock used by Rockruff for its special night evolution into Lycanroc Midnight.",
+    },
+    {
         "id": 34,
         "name": "Lunala Stone",
         "name_lower": "lunala stone",
@@ -1083,6 +1094,7 @@ MEGA_STONE_IDS = {item["id"] for item in ALL_ITEMS if item["category"] == "mega_
 # Linking Cord ID for convenience
 LINKING_CORD_ID = 29
 SOOTHE_BELL_ID = 30
+DUSK_ROCK_ID = 35
 RARE_CANDY_ID = 201
 INCENSE_ID = 202
 XP_BOOST_ID = 203

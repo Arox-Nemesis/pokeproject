@@ -105,6 +105,9 @@ VALID_TYPES: set[str] = {
 # dedicated PokeAPI flag, so one canonical set keeps collection and spawn UI consistent.
 ULTRA_BEAST_DEX: frozenset[int] = frozenset({793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806})
 
+# Official Ultra Beast species (Necrozma is intentionally excluded).
+ULTRA_BEAST_DEX_IDS: frozenset[int] = frozenset({793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806})
+
 RARITY_KEYWORDS: set[str] = {
     "legendary",
     "mythical",
